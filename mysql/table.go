@@ -1,6 +1,11 @@
 package mysql
 
-import "github.com/go-jet/jet/internal/jet"
+import (
+	"os"
+	"strings"
+
+	"github.com/go-jet/jet/internal/jet"
+)
 
 // Table is interface for MySQL tables
 type Table interface {
@@ -78,6 +83,24 @@ func (r readableTableInterfaceImpl) CROSS_JOIN(table ReadableTable) joinSelectUp
 
 // NewTable creates new table with schema Name, table Name and list of columns
 func NewTable(schemaName, name string, columns ...jet.ColumnExpression) Table {
+	// Expecting aliases in the form of "original=alias" separated by semicolons:
+	// foo=bar;hoge=piyo
+	jetSchemaAliases := os.Getenv("JET_MYSQL_SCHEMA_ALIASES")
+	pairs := strings.Split(jetSchemaAliases, ";")
+	for _, pair := range pairs {
+		split := strings.Split(pair, "=")
+		if len(split) != 2 {
+			continue
+		}
+		from := split[0]
+		to := split[1]
+
+		if schemaName == from {
+			schemaName = to
+			break
+		}
+	}
+
 	t := &tableImpl{
 		SerializerTable: jet.NewTable(schemaName, name, columns...),
 	}
