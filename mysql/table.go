@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-jet/jet/internal/jet"
+	"github.com/go-jet/jet/v2/internal/jet"
 )
 
 // Table is interface for MySQL tables
