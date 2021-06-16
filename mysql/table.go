@@ -82,7 +82,7 @@ func (r readableTableInterfaceImpl) CROSS_JOIN(table ReadableTable) joinSelectUp
 }
 
 // NewTable creates new table with schema Name, table Name and list of columns
-func NewTable(schemaName, name string, columns ...jet.ColumnExpression) Table {
+func NewTable(schemaName, name, alias string, columns ...jet.ColumnExpression) Table {
 	// Expecting aliases in the form of "original=alias" separated by semicolons:
 	// foo=bar;hoge=piyo
 	jetSchemaAliases := os.Getenv("JET_MYSQL_SCHEMA_ALIASES")
@@ -102,7 +102,7 @@ func NewTable(schemaName, name string, columns ...jet.ColumnExpression) Table {
 	}
 
 	t := &tableImpl{
-		SerializerTable: jet.NewTable(schemaName, name, columns...),
+		SerializerTable: jet.NewTable(schemaName, name, alias, columns...),
 	}
 
 	t.readableTableInterfaceImpl.parent = t
