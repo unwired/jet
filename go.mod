@@ -3,12 +3,20 @@ module github.com/go-jet/jet/v2
 go 1.11
 
 require (
-	github.com/go-sql-driver/mysql v1.5.0
-	github.com/google/go-cmp v0.5.0 //tests
-	github.com/google/uuid v1.1.1
-	github.com/jackc/pgx/v4 v4.11.0 //tests
-	github.com/lib/pq v1.7.0
-	github.com/pkg/profile v1.5.0 //tests
-	github.com/shopspring/decimal v1.2.0 // tests
-	github.com/stretchr/testify v1.6.1 // tests
+	github.com/go-sql-driver/mysql v1.7.0
+	github.com/google/uuid v1.3.0
+	github.com/jackc/pgconn v1.13.0
+	github.com/lib/pq v1.10.7
+	github.com/mattn/go-sqlite3 v1.14.16
+)
+
+// test dependencies
+require (
+	github.com/google/go-cmp v0.5.9
+	github.com/jackc/pgx/v4 v4.17.2
+	github.com/pkg/profile v1.7.0
+	github.com/shopspring/decimal v1.3.1
+	github.com/stretchr/testify v1.8.1
+	github.com/volatiletech/null/v8 v8.1.2
+	gopkg.in/guregu/null.v4 v4.0.0
 )

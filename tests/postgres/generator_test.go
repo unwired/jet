@@ -1,15 +1,20 @@
 package postgres
 
 import (
-	"github.com/go-jet/jet/v2/generator/postgres"
-	"github.com/go-jet/jet/v2/internal/testutils"
-	"github.com/go-jet/jet/v2/tests/dbconfig"
-	"github.com/stretchr/testify/require"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/go-jet/jet/v2/generator/postgres"
+	"github.com/go-jet/jet/v2/internal/testutils"
+	"github.com/go-jet/jet/v2/tests/dbconfig"
 
 	"github.com/go-jet/jet/v2/tests/.gentestdata/jetdb/dvds/model"
 )
@@ -49,8 +54,33 @@ func TestCmdGenerator(t *testing.T) {
 	err := os.RemoveAll(genTestDir2)
 	require.NoError(t, err)
 
-	cmd := exec.Command("jet", "-source=PostgreSQL", "-dbname=jetdb", "-host=localhost", "-port=5432",
-		"-user=jet", "-password=jet", "-schema=dvds", "-path="+genTestDir2)
+	cmd := exec.Command("jet", "-source=PostgreSQL", "-dbname=jetdb", "-host=localhost",
+		"-port="+strconv.Itoa(dbconfig.PgPort),
+		"-user=jet",
+		"-password=jet",
+		"-schema=dvds",
+		"-path="+genTestDir2)
+
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+
+	err = cmd.Run()
+	require.NoError(t, err)
+
+	assertGeneratedFiles(t)
+
+	err = os.RemoveAll(genTestDir2)
+	require.NoError(t, err)
+
+	// Check that connection via DSN works
+	dsn := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=disable",
+		dbconfig.PgUser,
+		dbconfig.PgPassword,
+		dbconfig.PgHost,
+		dbconfig.PgPort,
+		"jetdb",
+	)
+	cmd = exec.Command("jet", "-dsn="+dsn, "-schema=dvds", "-path="+genTestDir2)
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
 
@@ -63,20 +93,120 @@ func TestCmdGenerator(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestGeneratorIgnoreTables(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "with dsn",
+			args: []string{
+				"-dsn=" + fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=disable",
+					dbconfig.PgUser,
+					dbconfig.PgPassword,
+					dbconfig.PgHost,
+					dbconfig.PgPort,
+					"jetdb",
+				),
+				"-schema=dvds",
+				"-ignore-tables=actor,ADDRESS,country, Film , cITY,",
+				"-ignore-views=Actor_info, FILM_LIST ,staff_list",
+				"-ignore-enums=mpaa_rating",
+				"-path=" + genTestDir2,
+			},
+		},
+		{
+			name: "without dsn",
+			args: []string{
+				"-source=PostgreSQL",
+				"-host=localhost",
+				"-port=" + strconv.Itoa(dbconfig.PgPort),
+				"-user=jet",
+				"-password=jet",
+				"-dbname=jetdb",
+				"-schema=dvds",
+				"-ignore-tables=actor,ADDRESS,country, Film , cITY,",
+				"-ignore-views=Actor_info, FILM_LIST ,staff_list",
+				"-ignore-enums=mpaa_rating",
+				"-path=" + genTestDir2,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := os.RemoveAll(genTestDir2)
+			require.NoError(t, err)
+
+			cmd := exec.Command("jet", tt.args...)
+
+			fmt.Println(cmd.Args)
+			cmd.Stderr = os.Stderr
+			cmd.Stdout = os.Stdout
+
+			err = cmd.Run()
+			require.NoError(t, err)
+
+			// Table SQL Builder files
+			tableSQLBuilderFiles, err := ioutil.ReadDir("./.gentestdata2/jetdb/dvds/table")
+			require.NoError(t, err)
+
+			testutils.AssertFileNamesEqual(t, tableSQLBuilderFiles, "category.go",
+				"customer.go", "film_actor.go", "film_category.go", "inventory.go", "language.go",
+				"payment.go", "rental.go", "staff.go", "store.go", "table.go")
+
+			// View SQL Builder files
+			viewSQLBuilderFiles, err := ioutil.ReadDir("./.gentestdata2/jetdb/dvds/view")
+			require.NoError(t, err)
+
+			testutils.AssertFileNamesEqual(t, viewSQLBuilderFiles, "nicer_but_slower_film_list.go",
+				"sales_by_film_category.go", "customer_list.go", "sales_by_store.go", "view.go")
+
+			// Enums SQL Builder files
+			_, err = ioutil.ReadDir("./.gentestdata2/jetdb/dvds/enum")
+			require.Error(t, err, "open ./.gentestdata2/jetdb/dvds/enum: no such file or directory")
+
+			modelFiles, err := ioutil.ReadDir("./.gentestdata2/jetdb/dvds/model")
+			require.NoError(t, err)
+
+			testutils.AssertFileNamesEqual(t, modelFiles, "category.go",
+				"customer.go", "film_actor.go", "film_category.go", "inventory.go", "language.go",
+				"payment.go", "rental.go", "staff.go", "store.go",
+				"nicer_but_slower_film_list.go", "sales_by_film_category.go",
+				"customer_list.go", "sales_by_store.go")
+		})
+	}
+}
+
 func TestGenerator(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		err := postgres.Generate(genTestDir2, postgres.DBConnection{
-			Host:     dbconfig.Host,
-			Port:     dbconfig.Port,
-			User:     dbconfig.User,
-			Password: dbconfig.Password,
+			Host:     dbconfig.PgHost,
+			Port:     dbconfig.PgPort,
+			User:     dbconfig.PgUser,
+			Password: dbconfig.PgPassword,
 			SslMode:  "disable",
 			Params:   "",
 
-			DBName:     dbconfig.DBName,
+			DBName:     dbconfig.PgDBName,
 			SchemaName: "dvds",
 		})
+
+		require.NoError(t, err)
+
+		assertGeneratedFiles(t)
+	}
+
+	for i := 0; i < 3; i++ {
+		dsn := fmt.Sprintf("postgresql://%[1]s:%[2]s@%[3]s:%[4]d/%[5]s?sslmode=disable",
+			dbconfig.PgUser,
+			dbconfig.PgPassword,
+			dbconfig.PgHost,
+			dbconfig.PgPort,
+			dbconfig.PgDBName,
+		)
+		err := postgres.GenerateDSN(dsn, "dvds", genTestDir2)
 
 		require.NoError(t, err)
 
@@ -87,6 +217,23 @@ func TestGenerator(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestGeneratorSpecialCharacters(t *testing.T) {
+	t.SkipNow()
+	err := postgres.Generate(genTestDir2, postgres.DBConnection{
+		Host:     dbconfig.PgHost,
+		Port:     dbconfig.PgPort,
+		User:     "!@#$%^&* () {}[];+-",
+		Password: "!@#$%^&* () {}[];+-",
+		SslMode:  "disable",
+		Params:   "",
+
+		DBName:     "!@#$%^&* () {}[];+-",
+		SchemaName: "!@#$%^&* () {}[];+-",
+	})
+
+	require.NoError(t, err)
+}
+
 func assertGeneratedFiles(t *testing.T) {
 	// Table SQL Builder files
 	tableSQLBuilderFiles, err := ioutil.ReadDir("./.gentestdata2/jetdb/dvds/table")
@@ -94,18 +241,20 @@ func assertGeneratedFiles(t *testing.T) {
 
 	testutils.AssertFileNamesEqual(t, tableSQLBuilderFiles, "actor.go", "address.go", "category.go", "city.go", "country.go",
 		"customer.go", "film.go", "film_actor.go", "film_category.go", "inventory.go", "language.go",
-		"payment.go", "rental.go", "staff.go", "store.go")
+		"payment.go", "rental.go", "staff.go", "store.go", "table.go")
 
 	testutils.AssertFileContent(t, "./.gentestdata2/jetdb/dvds/table/actor.go", actorSQLBuilderFile)
+	testutils.AssertFileContent(t, "./.gentestdata2/jetdb/dvds/table/table.go", actorSQLBuilderTableFile)
 
 	// View SQL Builder files
 	viewSQLBuilderFiles, err := ioutil.ReadDir("./.gentestdata2/jetdb/dvds/view")
 	require.NoError(t, err)
 
 	testutils.AssertFileNamesEqual(t, viewSQLBuilderFiles, "actor_info.go", "film_list.go", "nicer_but_slower_film_list.go",
-		"sales_by_film_category.go", "customer_list.go", "sales_by_store.go", "staff_list.go")
+		"sales_by_film_category.go", "customer_list.go", "sales_by_store.go", "staff_list.go", "view.go")
 
 	testutils.AssertFileContent(t, "./.gentestdata2/jetdb/dvds/view/actor_info.go", actorInfoSQLBuilderFile)
+	testutils.AssertFileContent(t, "./.gentestdata2/jetdb/dvds/view/view.go", actorInfoSQLBuilderViewFile)
 
 	// Enums SQL Builder files
 	enumFiles, err := ioutil.ReadDir("./.gentestdata2/jetdb/dvds/enum")
@@ -199,6 +348,16 @@ func (a ActorTable) FromSchema(schemaName string) *ActorTable {
 	return newActorTable(schemaName, a.TableName(), a.Alias())
 }
 
+// WithPrefix creates new ActorTable with assigned table prefix
+func (a ActorTable) WithPrefix(prefix string) *ActorTable {
+	return newActorTable(a.SchemaName(), prefix+a.TableName(), a.TableName())
+}
+
+// WithSuffix creates new ActorTable with assigned table suffix
+func (a ActorTable) WithSuffix(suffix string) *ActorTable {
+	return newActorTable(a.SchemaName(), a.TableName()+suffix, a.TableName())
+}
+
 func newActorTable(schemaName, tableName, alias string) *ActorTable {
 	return &ActorTable{
 		actorTable: newActorTableImpl(schemaName, tableName, alias),
@@ -228,6 +387,38 @@ func newActorTableImpl(schemaName, tableName, alias string) actorTable {
 		AllColumns:     allColumns,
 		MutableColumns: mutableColumns,
 	}
+}
+`
+
+var actorSQLBuilderTableFile = `
+//
+// Code generated by go-jet DO NOT EDIT.
+//
+// WARNING: Changes to this file may cause incorrect behavior
+// and will be lost if the code is regenerated
+//
+
+package table
+
+// UseSchema changes all global tables/views with the value returned
+// returned by calling FromSchema on them. Passing an empty string to this function
+// will cause queries to be generated without any table/view alias.
+func UseSchema(schema string) {
+	Actor = Actor.FromSchema(schema)
+	Address = Address.FromSchema(schema)
+	Category = Category.FromSchema(schema)
+	City = City.FromSchema(schema)
+	Country = Country.FromSchema(schema)
+	Customer = Customer.FromSchema(schema)
+	Film = Film.FromSchema(schema)
+	FilmActor = FilmActor.FromSchema(schema)
+	FilmCategory = FilmCategory.FromSchema(schema)
+	Inventory = Inventory.FromSchema(schema)
+	Language = Language.FromSchema(schema)
+	Payment = Payment.FromSchema(schema)
+	Rental = Rental.FromSchema(schema)
+	Staff = Staff.FromSchema(schema)
+	Store = Store.FromSchema(schema)
 }
 `
 
@@ -298,6 +489,16 @@ func (a ActorInfoTable) FromSchema(schemaName string) *ActorInfoTable {
 	return newActorInfoTable(schemaName, a.TableName(), a.Alias())
 }
 
+// WithPrefix creates new ActorInfoTable with assigned table prefix
+func (a ActorInfoTable) WithPrefix(prefix string) *ActorInfoTable {
+	return newActorInfoTable(a.SchemaName(), prefix+a.TableName(), a.TableName())
+}
+
+// WithSuffix creates new ActorInfoTable with assigned table suffix
+func (a ActorInfoTable) WithSuffix(suffix string) *ActorInfoTable {
+	return newActorInfoTable(a.SchemaName(), a.TableName()+suffix, a.TableName())
+}
+
 func newActorInfoTable(schemaName, tableName, alias string) *ActorInfoTable {
 	return &ActorInfoTable{
 		actorInfoTable: newActorInfoTableImpl(schemaName, tableName, alias),
@@ -330,33 +531,59 @@ func newActorInfoTableImpl(schemaName, tableName, alias string) actorInfoTable {
 }
 `
 
+var actorInfoSQLBuilderViewFile = `
+//
+// Code generated by go-jet DO NOT EDIT.
+//
+// WARNING: Changes to this file may cause incorrect behavior
+// and will be lost if the code is regenerated
+//
+
+package view
+
+// UseSchema changes all global tables/views with the value returned
+// returned by calling FromSchema on them. Passing an empty string to this function
+// will cause queries to be generated without any table/view alias.
+func UseSchema(schema string) {
+	ActorInfo = ActorInfo.FromSchema(schema)
+	CustomerList = CustomerList.FromSchema(schema)
+	FilmList = FilmList.FromSchema(schema)
+	NicerButSlowerFilmList = NicerButSlowerFilmList.FromSchema(schema)
+	SalesByFilmCategory = SalesByFilmCategory.FromSchema(schema)
+	SalesByStore = SalesByStore.FromSchema(schema)
+	StaffList = StaffList.FromSchema(schema)
+}
+`
+
 func TestGeneratedAllTypesSQLBuilderFiles(t *testing.T) {
-	enumDir := testRoot + ".gentestdata/jetdb/test_sample/enum/"
-	modelDir := testRoot + ".gentestdata/jetdb/test_sample/model/"
-	tableDir := testRoot + ".gentestdata/jetdb/test_sample/table/"
+	skipForCockroachDB(t)
+
+	enumDir := filepath.Join(testRoot, "/.gentestdata/jetdb/test_sample/enum/")
+	modelDir := filepath.Join(testRoot, "/.gentestdata/jetdb/test_sample/model/")
+	tableDir := filepath.Join(testRoot, "/.gentestdata/jetdb/test_sample/table/")
 
 	enumFiles, err := ioutil.ReadDir(enumDir)
 	require.NoError(t, err)
 
 	testutils.AssertFileNamesEqual(t, enumFiles, "mood.go", "level.go")
-	testutils.AssertFileContent(t, enumDir+"mood.go", moodEnumContent)
-	testutils.AssertFileContent(t, enumDir+"level.go", levelEnumContent)
+	testutils.AssertFileContent(t, enumDir+"/mood.go", moodEnumContent)
+	testutils.AssertFileContent(t, enumDir+"/level.go", levelEnumContent)
 
 	modelFiles, err := ioutil.ReadDir(modelDir)
 	require.NoError(t, err)
 
 	testutils.AssertFileNamesEqual(t, modelFiles, "all_types.go", "all_types_view.go", "employee.go", "link.go",
-		"mood.go", "person.go", "person_phone.go", "weird_names_table.go", "level.go", "user.go", "floats.go")
+		"mood.go", "person.go", "person_phone.go", "weird_names_table.go", "level.go", "user.go", "floats.go", "people.go")
 
-	testutils.AssertFileContent(t, modelDir+"all_types.go", allTypesModelContent)
+	testutils.AssertFileContent(t, modelDir+"/all_types.go", allTypesModelContent)
 
 	tableFiles, err := ioutil.ReadDir(tableDir)
 	require.NoError(t, err)
 
 	testutils.AssertFileNamesEqual(t, tableFiles, "all_types.go", "employee.go", "link.go",
-		"person.go", "person_phone.go", "weird_names_table.go", "user.go", "floats.go")
+		"person.go", "person_phone.go", "weird_names_table.go", "user.go", "floats.go", "table.go", "people.go")
 
-	testutils.AssertFileContent(t, tableDir+"all_types.go", allTypesTableContent)
+	testutils.AssertFileContent(t, tableDir+"/all_types.go", allTypesTableContent)
 }
 
 var moodEnumContent = `
@@ -589,6 +816,16 @@ func (a AllTypesTable) AS(alias string) *AllTypesTable {
 // Schema creates new AllTypesTable with assigned schema name
 func (a AllTypesTable) FromSchema(schemaName string) *AllTypesTable {
 	return newAllTypesTable(schemaName, a.TableName(), a.Alias())
+}
+
+// WithPrefix creates new AllTypesTable with assigned table prefix
+func (a AllTypesTable) WithPrefix(prefix string) *AllTypesTable {
+	return newAllTypesTable(a.SchemaName(), prefix+a.TableName(), a.TableName())
+}
+
+// WithSuffix creates new AllTypesTable with assigned table suffix
+func (a AllTypesTable) WithSuffix(suffix string) *AllTypesTable {
+	return newAllTypesTable(a.SchemaName(), a.TableName()+suffix, a.TableName())
 }
 
 func newAllTypesTable(schemaName, tableName, alias string) *AllTypesTable {

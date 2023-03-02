@@ -40,10 +40,12 @@ type SelectStatement interface {
 	jet.HasProjections
 	Expression
 
+	OPTIMIZER_HINTS(hints ...OptimizerHint) SelectStatement
+
 	DISTINCT() SelectStatement
 	FROM(tables ...ReadableTable) SelectStatement
 	WHERE(expression BoolExpression) SelectStatement
-	GROUP_BY(groupByClauses ...jet.GroupByClause) SelectStatement
+	GROUP_BY(groupByClauses ...GroupByClause) SelectStatement
 	HAVING(boolExpression BoolExpression) SelectStatement
 	WINDOW(name string) windowExpand
 	ORDER_BY(orderByClauses ...OrderByClause) SelectStatement
@@ -58,16 +60,26 @@ type SelectStatement interface {
 	AsTable(alias string) SelectTable
 }
 
-//SELECT creates new SelectStatement with list of projections
+// SELECT creates new SelectStatement with list of projections
 func SELECT(projection Projection, projections ...Projection) SelectStatement {
 	return newSelectStatement(nil, append([]Projection{projection}, projections...))
 }
 
 func newSelectStatement(table ReadableTable, projections []Projection) SelectStatement {
 	newSelect := &selectStatementImpl{}
-	newSelect.ExpressionStatement = jet.NewExpressionStatementImpl(Dialect, jet.SelectStatementType, newSelect, &newSelect.Select,
-		&newSelect.From, &newSelect.Where, &newSelect.GroupBy, &newSelect.Having, &newSelect.Window, &newSelect.OrderBy,
-		&newSelect.Limit, &newSelect.Offset, &newSelect.For, &newSelect.ShareLock)
+	newSelect.ExpressionStatement = jet.NewExpressionStatementImpl(Dialect, jet.SelectStatementType, newSelect,
+		&newSelect.Select,
+		&newSelect.From,
+		&newSelect.Where,
+		&newSelect.GroupBy,
+		&newSelect.Having,
+		&newSelect.Window,
+		&newSelect.OrderBy,
+		&newSelect.Limit,
+		&newSelect.Offset,
+		&newSelect.For,
+		&newSelect.ShareLock,
+	)
 
 	newSelect.Select.ProjectionList = projections
 	if table != nil {
@@ -100,16 +112,18 @@ type selectStatementImpl struct {
 	ShareLock jet.ClauseOptional
 }
 
+func (s *selectStatementImpl) OPTIMIZER_HINTS(hints ...OptimizerHint) SelectStatement {
+	s.Select.OptimizerHints = hints
+	return s
+}
+
 func (s *selectStatementImpl) DISTINCT() SelectStatement {
 	s.Select.Distinct = true
 	return s
 }
 
 func (s *selectStatementImpl) FROM(tables ...ReadableTable) SelectStatement {
-	s.From.Tables = nil
-	for _, table := range tables {
-		s.From.Tables = append(s.From.Tables, table)
-	}
+	s.From.Tables = readableTablesToSerializerList(tables)
 	return s
 }
 
@@ -118,7 +132,7 @@ func (s *selectStatementImpl) WHERE(condition BoolExpression) SelectStatement {
 	return s
 }
 
-func (s *selectStatementImpl) GROUP_BY(groupByClauses ...jet.GroupByClause) SelectStatement {
+func (s *selectStatementImpl) GROUP_BY(groupByClauses ...GroupByClause) SelectStatement {
 	s.GroupBy.List = groupByClauses
 	return s
 }
@@ -188,4 +202,12 @@ func toJetFrameOffset(offset interface{}) jet.Serializer {
 	//}
 
 	return jet.FixedLiteral(offset)
+}
+
+func readableTablesToSerializerList(tables []ReadableTable) []jet.Serializer {
+	var ret []jet.Serializer
+	for _, table := range tables {
+		ret = append(ret, table)
+	}
+	return ret
 }

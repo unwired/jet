@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"github.com/volatiletech/null/v8"
 	"testing"
 	"time"
 
@@ -62,7 +63,8 @@ func TestScanToValidDestination(t *testing.T) {
 	t.Run("global query function scan", func(t *testing.T) {
 		queryStr, args := oneInventoryQuery.Sql()
 		dest := []struct{}{}
-		err := qrm.Query(nil, db, queryStr, args, &dest)
+		rowProcessed, err := qrm.Query(nil, db, queryStr, args, &dest)
+		require.Equal(t, rowProcessed, int64(1))
 		require.NoError(t, err)
 	})
 
@@ -78,16 +80,31 @@ func TestScanToValidDestination(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("pointer to slice of strings", func(t *testing.T) {
-		err := oneInventoryQuery.Query(db, &[]int32{})
+	t.Run("pointer to slice of integers", func(t *testing.T) {
+		var dest []int32
 
+		err := oneInventoryQuery.Query(db, &dest)
 		require.NoError(t, err)
+		require.Equal(t, dest[0], int32(1))
 	})
 
-	t.Run("pointer to slice of strings", func(t *testing.T) {
-		err := oneInventoryQuery.Query(db, &[]*int32{})
+	t.Run("pointer to slice integer pointers", func(t *testing.T) {
+		var dest []*int32
 
+		err := oneInventoryQuery.Query(db, &dest)
 		require.NoError(t, err)
+		require.Equal(t, dest[0], testutils.Int32Ptr(1))
+	})
+
+	t.Run("NULL to integer", func(t *testing.T) {
+		var dest struct {
+			Int64  int64
+			UInt64 uint64
+		}
+		err := SELECT(NULL.AS("int64"), NULL.AS("uint64")).Query(db, &dest)
+		require.NoError(t, err)
+		require.Equal(t, dest.Int64, int64(0))
+		require.Equal(t, dest.UInt64, uint64(0))
 	})
 }
 
@@ -189,7 +206,9 @@ func TestScanToStruct(t *testing.T) {
 
 		dest := Inventory{}
 
-		testutils.AssertQueryPanicErr(t, query, db, &dest, `jet: Scan: unable to scan type int32 into UUID,  at 'InventoryID uuid.UUID' of type postgres.Inventory`)
+		err := query.Query(db, &dest)
+		require.Error(t, err)
+		require.EqualError(t, err, "jet: can't scan int64('\\x01') to 'InventoryID uuid.UUID': Scan: unable to scan type int64 into UUID")
 	})
 
 	t.Run("type mismatch base type", func(t *testing.T) {
@@ -200,7 +219,9 @@ func TestScanToStruct(t *testing.T) {
 
 		dest := []Inventory{}
 
-		testutils.AssertQueryPanicErr(t, query.OFFSET(10), db, &dest, `jet: can't set int16 to bool`)
+		err := query.OFFSET(10).Query(db, &dest)
+		require.Error(t, err)
+		require.EqualError(t, err, "jet: can't assign int64('\\x02') to 'FilmID bool': can't assign int64(2) to bool")
 	})
 }
 
@@ -451,8 +472,9 @@ func TestScanToSlice(t *testing.T) {
 		t.Run("slice type mismatch", func(t *testing.T) {
 			var dest []bool
 
-			testutils.AssertQueryPanicErr(t, query, db, &dest, `jet: can't append int32 to []bool slice`)
-			//require.Error(t, err, `jet: can't append int32 to []bool slice `)
+			err := query.Query(db, &dest)
+			require.Error(t, err)
+			require.EqualError(t, err, `jet: can't append int64 to []bool slice: can't assign int64(2) to bool`)
 		})
 	})
 
@@ -762,18 +784,128 @@ func TestRowsScan(t *testing.T) {
 	require.NoError(t, err)
 
 	requireLogged(t, stmt)
+	requireQueryLogged(t, stmt, 0)
 }
 
-func TestScanNumericToNumber(t *testing.T) {
+func TestScanNullColumn(t *testing.T) {
+	stmt := SELECT(
+		Address.AllColumns,
+	).FROM(
+		Address,
+	).WHERE(
+		Address.Address2.IS_NULL(),
+	)
+
+	var dest []model.Address
+
+	err := stmt.Query(db, &dest)
+	require.NoError(t, err)
+	testutils.AssertJSON(t, dest, `
+[
+	{
+		"AddressID": 1,
+		"Address": "47 MySakila Drive",
+		"Address2": null,
+		"District": "Alberta",
+		"CityID": 300,
+		"PostalCode": "",
+		"Phone": "",
+		"LastUpdate": "2006-02-15T09:45:30Z"
+	},
+	{
+		"AddressID": 2,
+		"Address": "28 MySQL Boulevard",
+		"Address2": null,
+		"District": "QLD",
+		"CityID": 576,
+		"PostalCode": "",
+		"Phone": "",
+		"LastUpdate": "2006-02-15T09:45:30Z"
+	},
+	{
+		"AddressID": 3,
+		"Address": "23 Workhaven Lane",
+		"Address2": null,
+		"District": "Alberta",
+		"CityID": 300,
+		"PostalCode": "",
+		"Phone": "14033335568",
+		"LastUpdate": "2006-02-15T09:45:30Z"
+	},
+	{
+		"AddressID": 4,
+		"Address": "1411 Lillydale Drive",
+		"Address2": null,
+		"District": "QLD",
+		"CityID": 576,
+		"PostalCode": "",
+		"Phone": "6172235589",
+		"LastUpdate": "2006-02-15T09:45:30Z"
+	}
+]
+`)
+}
+
+func TestRowsScanSetZeroValue(t *testing.T) {
+	stmt := SELECT(
+		Rental.AllColumns,
+	).FROM(
+		Rental,
+	).WHERE(
+		Rental.RentalID.IN(Int(16049), Int(15966)),
+	).ORDER_BY(
+		Rental.RentalID.DESC(),
+	)
+
+	rows, err := stmt.Rows(context.Background(), db)
+	require.NoError(t, err)
+
+	defer rows.Close()
+
+	// destination object is used as destination for all rows scan.
+	// this tests checks that ReturnedDate is set to nil with the second call
+	// check qrm.setZeroValue
+	var dest model.Rental
+
+	for rows.Next() {
+		err := rows.Scan(&dest)
+		require.NoError(t, err)
+
+		if dest.RentalID == 16049 {
+			testutils.AssertJSON(t, dest, `
+{
+	"RentalID": 16049,
+	"RentalDate": "2005-08-23T22:50:12Z",
+	"InventoryID": 2666,
+	"CustomerID": 393,
+	"ReturnDate": "2005-08-30T01:01:12Z",
+	"StaffID": 2,
+	"LastUpdate": "2006-02-16T02:30:53Z"
+}
+`)
+		} else {
+			testutils.AssertJSON(t, dest, `
+{
+	"RentalID": 15966,
+	"RentalDate": "2006-02-14T15:16:03Z",
+	"InventoryID": 4472,
+	"CustomerID": 374,
+	"ReturnDate": null,
+	"StaffID": 1,
+	"LastUpdate": "2006-02-16T02:30:53Z"
+}
+`)
+		}
+	}
+
+	err = rows.Close()
+	require.NoError(t, err)
+	err = rows.Err()
+	require.NoError(t, err)
+}
+
+func TestScanNumericToFloat(t *testing.T) {
 	type Number struct {
-		Int8    int8
-		UInt8   uint8
-		Int16   int16
-		UInt16  uint16
-		Int32   int32
-		UInt32  uint32
-		Int64   int64
-		UInt64  uint64
 		Float32 float32
 		Float64 float64
 	}
@@ -781,14 +913,6 @@ func TestScanNumericToNumber(t *testing.T) {
 	numeric := CAST(Decimal("1234567890.111")).AS_NUMERIC()
 
 	stmt := SELECT(
-		numeric.AS("number.int8"),
-		numeric.AS("number.uint8"),
-		numeric.AS("number.int16"),
-		numeric.AS("number.uint16"),
-		numeric.AS("number.int32"),
-		numeric.AS("number.uint32"),
-		numeric.AS("number.int64"),
-		numeric.AS("number.uint64"),
 		numeric.AS("number.float32"),
 		numeric.AS("number.float64"),
 	)
@@ -796,17 +920,157 @@ func TestScanNumericToNumber(t *testing.T) {
 	var number Number
 	err := stmt.Query(db, &number)
 	require.NoError(t, err)
-
-	require.Equal(t, number.Int8, int8(-46))     // overflow
-	require.Equal(t, number.UInt8, uint8(210))   // overflow
-	require.Equal(t, number.Int16, int16(722))   // overflow
-	require.Equal(t, number.UInt16, uint16(722)) // overflow
-	require.Equal(t, number.Int32, int32(1234567890))
-	require.Equal(t, number.UInt32, uint32(1234567890))
-	require.Equal(t, number.Int64, int64(1234567890))
-	require.Equal(t, number.UInt64, uint64(1234567890))
 	require.Equal(t, number.Float32, float32(1.234568e+09))
 	require.Equal(t, number.Float64, float64(1.234567890111e+09))
+}
+
+func TestScanNumericToIntegerError(t *testing.T) {
+
+	var dest struct {
+		Integer int32
+	}
+
+	err := SELECT(
+		CAST(Decimal("1234567890.111")).AS_NUMERIC().AS("integer"),
+	).Query(db, &dest)
+
+	require.Error(t, err)
+
+	if isPgxDriver() {
+		require.Contains(t, err.Error(), `jet: can't assign string("1234567890.111") to 'Integer int32': converting driver.Value type string ("1234567890.111") to a int64: invalid syntax`)
+	} else {
+		require.Contains(t, err.Error(), `jet: can't assign []uint8("1234567890.111") to 'Integer int32': converting driver.Value type []uint8 ("1234567890.111") to a int64: invalid syntax`)
+	}
+
+}
+
+func TestScanIntoCustomBaseTypes(t *testing.T) {
+
+	type MyUint8 uint8
+	type MyUint16 uint16
+	type MyUint32 uint32
+	type MyInt16 int16
+	type MyFloat32 float32
+	type MyFloat64 float64
+	type MyString string
+	type MyTime = time.Time
+
+	type film struct {
+		FilmID          MyUint16 `sql:"primary_key"`
+		Title           MyString
+		Description     *MyString
+		ReleaseYear     *MyInt16
+		LanguageID      MyUint8
+		RentalDuration  MyUint8
+		RentalRate      MyFloat32
+		Length          *MyUint32
+		ReplacementCost MyFloat64
+		Rating          *model.MpaaRating
+		LastUpdate      MyTime
+		SpecialFeatures *MyString
+		Fulltext        MyString
+	}
+
+	stmt := SELECT(
+		Film.AllColumns,
+	).FROM(
+		Film,
+	).ORDER_BY(
+		Film.FilmID.ASC(),
+	).LIMIT(3)
+
+	var films []model.Film
+
+	err := stmt.Query(db, &films)
+	require.NoError(t, err)
+
+	var myFilms []film
+
+	err = stmt.Query(db, &myFilms)
+	require.NoError(t, err)
+
+	require.Equal(t, testutils.ToJSON(films), testutils.ToJSON(myFilms))
+}
+
+// QueryContext panic when the scanned value is nil and the destination is a slice of primitive
+// https://github.com/go-jet/jet/issues/91
+func TestScanToPrimitiveElementsSlice(t *testing.T) {
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	defer tx.Rollback()
+
+	// add actor without associated film (so that destination Title array is NULL).
+	_, err = Actor.INSERT().
+		MODEL(
+			model.Actor{
+				ActorID:    201,
+				FirstName:  "Brigitte",
+				LastName:   "Bardot",
+				LastUpdate: time.Time{},
+			},
+		).Exec(tx)
+	require.NoError(t, err)
+
+	stmt := SELECT(
+		Actor.ActorID.AS("actor_id"),
+		Film.Title.AS("title"),
+	).FROM(
+		Actor.
+			LEFT_JOIN(FilmActor, Actor.ActorID.EQ(FilmActor.ActorID)).
+			LEFT_JOIN(Film, Film.FilmID.EQ(FilmActor.FilmID)),
+	).WHERE(
+		Actor.ActorID.GT(Int(199)),
+	).ORDER_BY(Actor.ActorID.DESC())
+
+	var dest []struct {
+		ActorID int `sql:"primary_key"`
+		Title   []string
+	}
+
+	err = stmt.Query(tx, &dest)
+	require.NoError(t, err)
+	require.Equal(t, dest[0].ActorID, 201)
+	require.Equal(t, dest[0].Title, []string(nil))
+	require.Equal(t, dest[1].ActorID, 200)
+	require.Len(t, dest[1].Title, 20)
+}
+
+// https://github.com/go-jet/jet/issues/127
+func TestValuerTypeDebugSQL(t *testing.T) {
+	type customer struct {
+		CustomerID null.Int32 `sql:"primary_key"`
+		StoreID    null.Int16
+		FirstName  null.String
+		LastName   string
+		Email      null.String
+		AddressID  int16
+		Activebool null.Bool
+		CreateDate null.Time
+		LastUpdate null.Time
+		Active     null.Int8
+	}
+
+	stmt := Customer.INSERT().
+		MODEL(
+			customer{
+				CustomerID: null.Int32From(1234),
+				StoreID:    null.Int16From(0),
+				FirstName:  null.StringFrom("Joe"),
+				LastName:   "",
+				Email:      null.StringFromPtr(nil),
+				AddressID:  1,
+				Activebool: null.BoolFrom(true),
+				CreateDate: null.TimeFrom(time.Date(2020, 2, 2, 10, 0, 0, 0, time.UTC)),
+				LastUpdate: null.TimeFromPtr(nil),
+				Active:     null.Int8From(1),
+			},
+		)
+
+	testutils.AssertDebugStatementSql(t, stmt, `
+INSERT INTO dvds.customer
+VALUES (1234, 0, 'Joe', '', NULL, 1, TRUE, '2020-02-02 10:00:00Z', NULL, 1);
+`)
+	testutils.AssertExecAndRollback(t, stmt, db)
 }
 
 var address256 = model.Address{

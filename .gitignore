@@ -19,3 +19,8 @@
 gen
 .gentestdata
 .tests/testdata/
+.gen
+.docker
+.env
+.tempTestDir
+.gentestdata3

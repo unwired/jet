@@ -38,6 +38,7 @@ WHERE actor.actor_id = ?;
 
 	testutils.AssertDeepEqual(t, actor, actor2)
 	requireLogged(t, query)
+	requireQueryLogged(t, query, 1)
 }
 
 var actor2 = model.Actor{
@@ -60,9 +61,9 @@ SELECT actor.actor_id AS "actor.actor_id",
 FROM dvds.actor
 ORDER BY actor.actor_id;
 `)
-	dest := []model.Actor{}
+	var dest []model.Actor
 
-	err := query.Query(db, &dest)
+	err := query.QueryContext(context.Background(), db, &dest)
 
 	require.NoError(t, err)
 
@@ -73,6 +74,7 @@ ORDER BY actor.actor_id;
 	//testutils.SaveJsonFile(dest, "mysql/testdata/all_actors.json")
 	testutils.AssertJSONFile(t, dest, "./testdata/results/mysql/all_actors.json")
 	requireLogged(t, query)
+	requireQueryLogged(t, query, 200)
 }
 
 func TestSelectGroupByHaving(t *testing.T) {
@@ -151,6 +153,68 @@ ORDER BY payment.customer_id, SUM(payment.amount) ASC;
 	//testutils.SaveJsonFile(dest, "mysql/testdata/customer_payment_sum.json")
 	testutils.AssertJSONFile(t, dest, "./testdata/results/mysql/customer_payment_sum.json")
 	requireLogged(t, query)
+}
+
+func TestAggregateFunctionDistinct(t *testing.T) {
+	stmt := SELECT(
+		Payment.CustomerID,
+
+		COUNT(DISTINCT(Payment.Amount)).AS("distinct.count"),
+		SUM(DISTINCT(Payment.Amount)).AS("distinct.sum"),
+		AVG(DISTINCT(Payment.Amount)).AS("distinct.avg"),
+		MIN(DISTINCT(Payment.PaymentDate)).AS("distinct.first_payment_date"),
+		MAX(DISTINCT(Payment.PaymentDate)).AS("distinct.last_payment_date"),
+	).FROM(
+		Payment,
+	).WHERE(
+		Payment.CustomerID.EQ(Int(1)),
+	).GROUP_BY(
+		Payment.CustomerID,
+	)
+
+	testutils.AssertDebugStatementSql(t, stmt, `
+SELECT payment.customer_id AS "payment.customer_id",
+     COUNT(DISTINCT payment.amount) AS "distinct.count",
+     SUM(DISTINCT payment.amount) AS "distinct.sum",
+     AVG(DISTINCT payment.amount) AS "distinct.avg",
+     MIN(DISTINCT payment.payment_date) AS "distinct.first_payment_date",
+     MAX(DISTINCT payment.payment_date) AS "distinct.last_payment_date"
+FROM dvds.payment
+WHERE payment.customer_id = 1
+GROUP BY payment.customer_id;
+`)
+
+	type Distinct struct {
+		model.Payment
+
+		Count            int64
+		Sum              float64
+		Avg              float64
+		FirstPaymentDate time.Time
+		LastPaymentDate  time.Time
+	}
+
+	var dest Distinct
+
+	err := stmt.Query(db, &dest)
+	require.NoError(t, err)
+	testutils.AssertJSON(t, dest, `
+{
+	"PaymentID": 0,
+	"CustomerID": 1,
+	"StaffID": 0,
+	"RentalID": null,
+	"Amount": 0,
+	"PaymentDate": "0001-01-01T00:00:00Z",
+	"LastUpdate": "0001-01-01T00:00:00Z",
+	"Count": 8,
+	"Sum": 38.92,
+	"Avg": 4.865,
+	"FirstPaymentDate": "2005-05-25T11:30:37Z",
+	"LastPaymentDate": "2005-08-22T20:03:46Z"
+}
+`)
+
 }
 
 func TestSubQuery(t *testing.T) {
@@ -389,8 +453,6 @@ LIMIT ?;
 			).
 			LIMIT(1000)
 
-		//fmt.Println(query.Sql())
-
 		testutils.AssertStatementSql(t, query, expectedSQL, int64(1000))
 
 		var dest []struct {
@@ -414,12 +476,7 @@ LIMIT ?;
 		err := query.Query(db, &dest)
 
 		require.NoError(t, err)
-		//require.Equal(t, len(dest), 1)
-		//require.Equal(t, len(dest[0].Films), 10)
-		//require.Equal(t, len(dest[0].Films[0].Actors), 10)
-
 		//testutils.SaveJsonFile(dest, "./mysql/testdata/lang_film_actor_inventory_rental.json")
-
 		testutils.AssertJSONFile(t, dest, "./testdata/results/mysql/lang_film_actor_inventory_rental.json")
 	}
 }
@@ -894,8 +951,12 @@ func TestRowsScan(t *testing.T) {
 
 	stmt := SELECT(
 		Inventory.AllColumns,
+		Film.AllColumns,
+		Store.AllColumns,
 	).FROM(
-		Inventory,
+		Inventory.
+			INNER_JOIN(Film, Film.FilmID.EQ(Inventory.FilmID)).
+			INNER_JOIN(Store, Store.StoreID.EQ(Inventory.StoreID)),
 	).ORDER_BY(
 		Inventory.InventoryID.ASC(),
 	)
@@ -903,20 +964,43 @@ func TestRowsScan(t *testing.T) {
 	rows, err := stmt.Rows(context.Background(), db)
 	require.NoError(t, err)
 
+	var inventory struct {
+		model.Inventory
+
+		Film  model.Film
+		Store model.Store
+	}
+
 	for rows.Next() {
-		var inventory model.Inventory
 		err = rows.Scan(&inventory)
 		require.NoError(t, err)
 
-		require.NotEqual(t, inventory.InventoryID, uint32(0))
-		require.NotEqual(t, inventory.FilmID, uint16(0))
-		require.NotEqual(t, inventory.StoreID, uint16(0))
-		require.NotEqual(t, inventory.LastUpdate, time.Time{})
+		require.NotEmpty(t, inventory.InventoryID)
+		require.NotEmpty(t, inventory.FilmID)
+		require.NotEmpty(t, inventory.StoreID)
+		require.NotEmpty(t, inventory.LastUpdate)
+
+		require.NotEmpty(t, inventory.Film.FilmID)
+		require.NotEmpty(t, inventory.Film.Title)
+		require.NotEmpty(t, inventory.Film.Description)
+
+		require.NotEmpty(t, inventory.Store.StoreID)
+		require.NotEmpty(t, inventory.Store.AddressID)
+		require.NotEmpty(t, inventory.Store.ManagerStaffID)
 
 		if inventory.InventoryID == 2103 {
 			require.Equal(t, inventory.FilmID, uint16(456))
 			require.Equal(t, inventory.StoreID, uint8(2))
 			require.Equal(t, inventory.LastUpdate.Format(time.RFC3339), "2006-02-15T05:09:17Z")
+
+			require.Equal(t, inventory.Film.FilmID, uint16(456))
+			require.Equal(t, inventory.Film.Title, "INCH JET")
+			require.Equal(t, *inventory.Film.Description, "A Fateful Saga of a Womanizer And a Student who must Defeat a Butler in A Monastery")
+			require.Equal(t, *inventory.Film.ReleaseYear, int16(2006))
+
+			require.Equal(t, inventory.Store.StoreID, uint8(2))
+			require.Equal(t, inventory.Store.ManagerStaffID, uint8(2))
+			require.Equal(t, inventory.Store.AddressID, uint16(2))
 		}
 	}
 
@@ -971,4 +1055,159 @@ func TestScanNumericToNumber(t *testing.T) {
 	require.Equal(t, number.UInt64, uint64(1234567890))
 	require.Equal(t, number.Float32, float32(1.234568e+09))
 	require.Equal(t, number.Float64, float64(1.23456789e+09))
+}
+
+// scan into custom base types should be equivalent to the scan into base go types
+func TestScanIntoCustomBaseTypes(t *testing.T) {
+
+	type MyUint8 uint8
+	type MyUint16 uint16
+	type MyUint32 uint32
+	type MyInt16 int16
+	type MyFloat32 float32
+	type MyFloat64 float64
+	type MyString string
+	type MyTime = time.Time
+
+	type film struct {
+		FilmID             MyUint16 `sql:"primary_key"`
+		Title              MyString
+		Description        *MyString
+		ReleaseYear        *MyInt16
+		LanguageID         MyUint8
+		OriginalLanguageID *MyUint8
+		RentalDuration     MyUint8
+		RentalRate         MyFloat32
+		Length             *MyUint32
+		ReplacementCost    MyFloat64
+		Rating             *model.FilmRating
+		SpecialFeatures    *MyString
+		LastUpdate         MyTime
+	}
+
+	stmt := SELECT(
+		Film.AllColumns,
+	).FROM(
+		Film,
+	).ORDER_BY(
+		Film.FilmID.ASC(),
+	).LIMIT(3)
+
+	var films []model.Film
+	err := stmt.Query(db, &films)
+	require.NoError(t, err)
+
+	var myFilms []film
+	err = stmt.Query(db, &myFilms)
+	require.NoError(t, err)
+
+	require.Equal(t, testutils.ToJSON(films), testutils.ToJSON(myFilms))
+}
+
+func TestConditionalFunctions(t *testing.T) {
+	stmt := SELECT(
+		EXISTS(
+			Film.SELECT(Film.FilmID).WHERE(Film.RentalDuration.GT(Int(100))),
+		).AS("exists"),
+		CASE(Film.Length.GT(Int(120))).
+			WHEN(Bool(true)).THEN(String("long film")).
+			ELSE(String("short film")).AS("case"),
+		COALESCE(Film.Description, String("none")).AS("coalesce"),
+		NULLIF(Film.ReleaseYear, Int(200)).AS("null_if"),
+		GREATEST(Film.RentalDuration, Int(4), Int(5)).AS("greatest"),
+		LEAST(Film.RentalDuration, Int(7), Int(6)).AS("least"),
+	).FROM(
+		Film,
+	).WHERE(
+		Film.FilmID.LT(Int(5)),
+	).ORDER_BY(
+		Film.FilmID,
+	)
+
+	testutils.AssertDebugStatementSql(t, stmt, `
+SELECT (EXISTS (
+          SELECT film.film_id AS "film.film_id"
+          FROM dvds.film
+          WHERE film.rental_duration > 100
+     )) AS "exists",
+     (CASE (film.length > 120) WHEN TRUE THEN 'long film' ELSE 'short film' END) AS "case",
+     COALESCE(film.description, 'none') AS "coalesce",
+     NULLIF(film.release_year, 200) AS "null_if",
+     GREATEST(film.rental_duration, 4, 5) AS "greatest",
+     LEAST(film.rental_duration, 7, 6) AS "least"
+FROM dvds.film
+WHERE film.film_id < 5
+ORDER BY film.film_id;
+`)
+
+	var res []struct {
+		Exists   string
+		Case     string
+		Coalesce string
+		NullIf   string
+		Greatest string
+		Least    string
+	}
+
+	err := stmt.Query(db, &res)
+	require.NoError(t, err)
+
+	testutils.AssertJSON(t, res, `
+[
+	{
+		"Exists": "0",
+		"Case": "short film",
+		"Coalesce": "A Epic Drama of a Feminist And a Mad Scientist who must Battle a Teacher in The Canadian Rockies",
+		"NullIf": "2006",
+		"Greatest": "6",
+		"Least": "6"
+	},
+	{
+		"Exists": "0",
+		"Case": "short film",
+		"Coalesce": "A Astounding Epistle of a Database Administrator And a Explorer who must Find a Car in Ancient China",
+		"NullIf": "2006",
+		"Greatest": "5",
+		"Least": "3"
+	},
+	{
+		"Exists": "0",
+		"Case": "short film",
+		"Coalesce": "A Astounding Reflection of a Lumberjack And a Car who must Sink a Lumberjack in A Baloon Factory",
+		"NullIf": "2006",
+		"Greatest": "7",
+		"Least": "6"
+	},
+	{
+		"Exists": "0",
+		"Case": "short film",
+		"Coalesce": "A Fanciful Documentary of a Frisbee And a Lumberjack who must Chase a Monkey in A Shark Tank",
+		"NullIf": "2006",
+		"Greatest": "5",
+		"Least": "5"
+	}
+]
+`)
+}
+
+func TestSelectOptimizerHints(t *testing.T) {
+
+	stmt := SELECT(Actor.AllColumns).
+		OPTIMIZER_HINTS(MAX_EXECUTION_TIME(1), QB_NAME("mainQueryBlock"), "NO_ICP(actor)").
+		DISTINCT().
+		FROM(Actor)
+
+	testutils.AssertDebugStatementSql(t, stmt, `
+SELECT /*+ MAX_EXECUTION_TIME(1) QB_NAME(mainQueryBlock) NO_ICP(actor) */ DISTINCT actor.actor_id AS "actor.actor_id",
+     actor.first_name AS "actor.first_name",
+     actor.last_name AS "actor.last_name",
+     actor.last_update AS "actor.last_update"
+FROM dvds.actor;
+`)
+
+	var actors []model.Actor
+
+	err := stmt.QueryContext(context.Background(), db, &actors)
+	require.NoError(t, err)
+	require.Len(t, actors, 200)
 }

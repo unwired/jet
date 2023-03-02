@@ -118,7 +118,7 @@ func Uint64(value uint64) IntegerExpression {
 	return intLiteral(value)
 }
 
-//---------------------------------------------------//
+// ---------------------------------------------------//
 type boolLiteralExpression struct {
 	boolInterfaceImpl
 	literalExpressionImpl
@@ -134,7 +134,7 @@ func Bool(value bool) BoolExpression {
 	return &boolLiteralExpression
 }
 
-//---------------------------------------------------//
+// ---------------------------------------------------//
 type floatLiteral struct {
 	floatInterfaceImpl
 	literalExpressionImpl
@@ -160,7 +160,7 @@ func Decimal(value string) FloatExpression {
 	return &floatLiteral
 }
 
-//---------------------------------------------------//
+// ---------------------------------------------------//
 type stringLiteral struct {
 	stringInterfaceImpl
 	literalExpressionImpl
@@ -351,7 +351,7 @@ func (n *nullLiteral) serialize(statement StatementType, out *SQLBuilder, option
 	out.WriteString("NULL")
 }
 
-//--------------------------------------------------//
+// --------------------------------------------------//
 type starLiteral struct {
 	ExpressionInterfaceImpl
 }
@@ -375,9 +375,14 @@ type wrap struct {
 	expressions []Expression
 }
 
-func (n *wrap) serialize(statement StatementType, out *SQLBuilder, options ...SerializeOption) {
+func (n *wrap) serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
 	out.WriteString("(")
-	serializeExpressionList(statement, n.expressions, ", ", out)
+
+	if len(n.expressions) == 1 {
+		options = append(options, NoWrap, Ident)
+	}
+	serializeExpressionList(statementType, n.expressions, ", ", out, options...)
+
 	out.WriteString(")")
 }
 

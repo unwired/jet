@@ -2,19 +2,19 @@ package mysql
 
 import (
 	"context"
-	"github.com/go-jet/jet/v2/internal/testutils"
-	. "github.com/go-jet/jet/v2/mysql"
-	"github.com/go-jet/jet/v2/tests/.gentestdata/mysql/dvds/table"
-	"github.com/go-jet/jet/v2/tests/.gentestdata/mysql/test_sample/model"
-	. "github.com/go-jet/jet/v2/tests/.gentestdata/mysql/test_sample/table"
-	"github.com/stretchr/testify/require"
+	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/go-jet/jet/v2/internal/testutils"
+	. "github.com/go-jet/jet/v2/mysql"
+	"github.com/go-jet/jet/v2/tests/.gentestdata/mysql/test_sample/model"
+	. "github.com/go-jet/jet/v2/tests/.gentestdata/mysql/test_sample/table"
 )
 
 func TestUpdateValues(t *testing.T) {
-	setupLinkTableForUpdateTest(t)
-
 	var expectedSQL = `
 UPDATE test_sample.link
 SET name = 'Bong',
@@ -28,8 +28,26 @@ WHERE link.name = 'Bing';
 			WHERE(Link.Name.EQ(String("Bing")))
 
 		testutils.AssertDebugStatementSql(t, query, expectedSQL, "Bong", "http://bong.com", "Bing")
-		testutils.AssertExec(t, query, db)
-		requireLogged(t, query)
+		testutils.ExecuteInTxAndRollback(t, db, func(tx *sql.Tx) {
+			testutils.AssertExec(t, query, tx)
+			requireLogged(t, query)
+
+			var links []model.Link
+
+			err := Link.
+				SELECT(Link.AllColumns).
+				WHERE(Link.Name.EQ(String("Bong"))).
+				Query(tx, &links)
+
+			require.NoError(t, err)
+			require.Equal(t, len(links), 1)
+			testutils.AssertDeepEqual(t, links[0], model.Link{
+				ID:   204,
+				URL:  "http://bong.com",
+				Name: "Bong",
+			})
+		})
+
 	})
 
 	t.Run("new version", func(t *testing.T) {
@@ -41,34 +59,32 @@ WHERE link.name = 'Bing';
 			WHERE(Link.Name.EQ(String("Bing")))
 
 		testutils.AssertDebugStatementSql(t, stmt, expectedSQL, "Bong", "http://bong.com", "Bing")
-		testutils.AssertExec(t, stmt, db)
-		requireLogged(t, stmt)
-	})
+		testutils.ExecuteInTxAndRollback(t, db, func(tx *sql.Tx) {
+			testutils.AssertExec(t, stmt, tx)
+			requireLogged(t, stmt)
 
-	links := []model.Link{}
+			var links []model.Link
 
-	err := Link.
-		SELECT(Link.AllColumns).
-		WHERE(Link.Name.EQ(String("Bong"))).
-		Query(db, &links)
+			err := Link.
+				SELECT(Link.AllColumns).
+				WHERE(Link.Name.EQ(String("Bong"))).
+				Query(tx, &links)
 
-	require.NoError(t, err)
-	require.Equal(t, len(links), 1)
-	testutils.AssertDeepEqual(t, links[0], model.Link{
-		ID:   204,
-		URL:  "http://bong.com",
-		Name: "Bong",
+			require.NoError(t, err)
+			require.Equal(t, len(links), 1)
+			testutils.AssertDeepEqual(t, links[0], model.Link{
+				ID:   204,
+				URL:  "http://bong.com",
+				Name: "Bong",
+			})
+		})
 	})
 }
 
 func TestUpdateWithSubQueries(t *testing.T) {
-	setupLinkTableForUpdateTest(t)
-
 	expectedSQL := `
 UPDATE test_sample.link
-SET name = (
-         SELECT ?
-    ),
+SET name = ?,
     url = (
          SELECT link2.url AS "link2.url"
          FROM test_sample.link2
@@ -80,7 +96,7 @@ WHERE link.name = ?;
 		query := Link.
 			UPDATE(Link.Name, Link.URL).
 			SET(
-				SELECT(String("Bong")),
+				String("Bong"),
 				SELECT(Link2.URL).
 					FROM(Link2).
 					WHERE(Link2.Name.EQ(String("Youtube"))),
@@ -88,7 +104,7 @@ WHERE link.name = ?;
 			WHERE(Link.Name.EQ(String("Bing")))
 
 		testutils.AssertStatementSql(t, query, expectedSQL, "Bong", "Youtube", "Bing")
-		testutils.AssertExec(t, query, db)
+		testutils.AssertExecAndRollback(t, query, db)
 		requireLogged(t, query)
 	})
 
@@ -96,7 +112,7 @@ WHERE link.name = ?;
 		query := Link.
 			UPDATE().
 			SET(
-				Link.Name.SET(StringExp(SELECT(String("Bong")))),
+				Link.Name.SET(String("Bong")),
 				Link.URL.SET(StringExp(
 					SELECT(Link2.URL).
 						FROM(Link2).
@@ -106,14 +122,12 @@ WHERE link.name = ?;
 			WHERE(Link.Name.EQ(String("Bing")))
 
 		testutils.AssertStatementSql(t, query, expectedSQL, "Bong", "Youtube", "Bing")
-		testutils.AssertExec(t, query, db)
+		testutils.AssertExecAndRollback(t, query, db)
 		requireLogged(t, query)
 	})
 }
 
 func TestUpdateWithModelData(t *testing.T) {
-	setupLinkTableForUpdateTest(t)
-
 	link := model.Link{
 		ID:   201,
 		URL:  "http://www.duckduckgo.com",
@@ -123,26 +137,22 @@ func TestUpdateWithModelData(t *testing.T) {
 	stmt := Link.
 		UPDATE(Link.AllColumns).
 		MODEL(link).
-		WHERE(Link.ID.EQ(Int(int64(link.ID))))
+		WHERE(Link.ID.EQ(Int32(link.ID)))
 
-	expectedSQL := `
+	testutils.AssertStatementSql(t, stmt, `
 UPDATE test_sample.link
 SET id = ?,
     url = ?,
     name = ?,
     description = ?
 WHERE link.id = ?;
-`
-	testutils.AssertStatementSql(t, stmt, expectedSQL, int32(201), "http://www.duckduckgo.com", "DuckDuckGo", nil, int64(201))
+`, int32(201), "http://www.duckduckgo.com", "DuckDuckGo", nil, int32(201))
 
-	testutils.AssertExec(t, stmt, db)
+	testutils.AssertExecAndRollback(t, stmt, db)
 	requireLogged(t, stmt)
 }
 
 func TestUpdateWithModelDataAndPredefinedColumnList(t *testing.T) {
-
-	setupLinkTableForUpdateTest(t)
-
 	link := model.Link{
 		ID:   201,
 		URL:  "http://www.duckduckgo.com",
@@ -154,26 +164,21 @@ func TestUpdateWithModelDataAndPredefinedColumnList(t *testing.T) {
 	stmt := Link.
 		UPDATE(updateColumnList).
 		MODEL(link).
-		WHERE(Link.ID.EQ(Int(int64(link.ID))))
+		WHERE(Link.ID.EQ(Int32(link.ID)))
 
-	var expectedSQL = `
+	testutils.AssertDebugStatementSql(t, stmt, `
 UPDATE test_sample.link
 SET description = NULL,
     name = 'DuckDuckGo',
     url = 'http://www.duckduckgo.com'
 WHERE link.id = 201;
-`
-	//fmt.Println(stmt.DebugSql())
+`, nil, "DuckDuckGo", "http://www.duckduckgo.com", int32(201))
 
-	testutils.AssertDebugStatementSql(t, stmt, expectedSQL, nil, "DuckDuckGo", "http://www.duckduckgo.com", int64(201))
-
-	testutils.AssertExec(t, stmt, db)
+	testutils.AssertExecAndRollback(t, stmt, db)
 	requireLogged(t, stmt)
 }
 
 func TestUpdateWithModelDataAndMutableColumns(t *testing.T) {
-	setupLinkTableForUpdateTest(t)
-
 	link := model.Link{
 		ID:   201,
 		URL:  "http://www.duckduckgo.com",
@@ -183,7 +188,7 @@ func TestUpdateWithModelDataAndMutableColumns(t *testing.T) {
 	stmt := Link.
 		UPDATE(Link.MutableColumns).
 		MODEL(link).
-		WHERE(Link.ID.EQ(Int(int64(link.ID))))
+		WHERE(Link.ID.EQ(Int32(link.ID)))
 
 	var expectedSQL = `
 UPDATE test_sample.link
@@ -194,8 +199,8 @@ WHERE link.id = 201;
 `
 	//fmt.Println(stmt.DebugSql())
 
-	testutils.AssertDebugStatementSql(t, stmt, expectedSQL, "http://www.duckduckgo.com", "DuckDuckGo", nil, int64(201))
-	testutils.AssertExec(t, stmt, db)
+	testutils.AssertDebugStatementSql(t, stmt, expectedSQL, "http://www.duckduckgo.com", "DuckDuckGo", nil, int32(201))
+	testutils.AssertExecAndRollback(t, stmt, db)
 }
 
 func TestUpdateWithInvalidModelData(t *testing.T) {
@@ -203,8 +208,6 @@ func TestUpdateWithInvalidModelData(t *testing.T) {
 		r := recover()
 		require.Equal(t, r, "missing struct field for column : id")
 	}()
-
-	setupLinkTableForUpdateTest(t)
 
 	link := struct {
 		Ident       int
@@ -218,17 +221,13 @@ func TestUpdateWithInvalidModelData(t *testing.T) {
 		Name:  "DuckDuckGo",
 	}
 
-	stmt := Link.
+	_ = Link.
 		UPDATE(Link.AllColumns).
 		MODEL(link).
 		WHERE(Link.ID.EQ(Int(int64(link.Ident))))
-
-	stmt.Sql()
 }
 
 func TestUpdateQueryContext(t *testing.T) {
-	setupLinkTableForUpdateTest(t)
-
 	updateStmt := Link.
 		UPDATE(Link.Name, Link.URL).
 		SET("Bong", "http://bong.com").
@@ -246,8 +245,6 @@ func TestUpdateQueryContext(t *testing.T) {
 }
 
 func TestUpdateExecContext(t *testing.T) {
-	setupLinkTableForUpdateTest(t)
-
 	updateStmt := Link.
 		UPDATE(Link.Name, Link.URL).
 		SET("Bong", "http://bong.com").
@@ -263,30 +260,28 @@ func TestUpdateExecContext(t *testing.T) {
 	require.Error(t, err, "context deadline exceeded")
 }
 
-func TestUpdateWithJoin(t *testing.T) {
-	query := table.Staff.
-		INNER_JOIN(table.Address, table.Address.AddressID.EQ(table.Staff.AddressID)).
-		UPDATE(table.Staff.LastName).
-		SET(String("New name")).
-		WHERE(table.Staff.StaffID.EQ(Int(1)))
+func TestUpdateOptimizerHints(t *testing.T) {
 
-	//fmt.Println(query.DebugSql())
+	stmt := Link.UPDATE(Link.AllColumns).
+		OPTIMIZER_HINTS(QB_NAME("qbInsert"), "MRR(link)").
+		MODEL(model.Link{
+			ID:   501,
+			URL:  "http://www.duckduckgo.com",
+			Name: "DuckDuckGo",
+		}).
+		WHERE(Link.Name.EQ(String("Bing")))
 
-	_, err := query.Exec(db)
-	require.NoError(t, err)
-}
+	testutils.AssertDebugStatementSql(t, stmt, `
+UPDATE /*+ QB_NAME(qbInsert) MRR(link) */ test_sample.link
+SET id = 501,
+    url = 'http://www.duckduckgo.com',
+    name = 'DuckDuckGo',
+    description = NULL
+WHERE link.name = 'Bing';
+`)
 
-func setupLinkTableForUpdateTest(t *testing.T) {
-
-	cleanUpLinkTable(t)
-
-	_, err := Link.INSERT(Link.ID, Link.URL, Link.Name, Link.Description).
-		VALUES(200, "http://www.postgresqltutorial.com", "PostgreSQL Tutorial", DEFAULT).
-		VALUES(201, "http://www.ask.com", "Ask", DEFAULT).
-		VALUES(202, "http://www.ask.com", "Ask", DEFAULT).
-		VALUES(203, "http://www.yahoo.com", "Yahoo", DEFAULT).
-		VALUES(204, "http://www.bing.com", "Bing", DEFAULT).
-		Exec(db)
-
-	require.NoError(t, err)
+	testutils.ExecuteInTxAndRollback(t, db, func(tx *sql.Tx) {
+		_, err := stmt.Exec(tx)
+		require.NoError(t, err)
+	})
 }

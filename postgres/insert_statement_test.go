@@ -8,7 +8,6 @@ import (
 )
 
 func TestInvalidInsert(t *testing.T) {
-	assertStatementSqlErr(t, table1.INSERT(table1Col1), "jet: VALUES or QUERY has to be specified for INSERT statement")
 	assertStatementSqlErr(t, table1.INSERT(nil).VALUES(1), "jet: nil column in columns list")
 }
 
@@ -155,7 +154,7 @@ func TestInsert_ON_CONFLICT(t *testing.T) {
 		ON_CONFLICT(table1ColBool).WHERE(table1ColBool.IS_NOT_FALSE()).DO_UPDATE(
 		SET(table1ColBool.SET(Bool(true)),
 			table2ColInt.SET(Int(1)),
-			ColumnList{table1Col1, table1ColBool}.SET(jet.ROW(Int(2), String("two"))),
+			ColumnList{table1Col1, table1ColBool}.SET(ROW(Int(2), String("two"))),
 		).WHERE(table1Col1.GT(Int(2))),
 	).
 		RETURNING(table1Col1, table1ColBool)
@@ -166,9 +165,9 @@ VALUES ('one', 'two'),
        ('1', '2'),
        ('theta', 'beta')
 ON CONFLICT (col_bool) WHERE col_bool IS NOT FALSE DO UPDATE
-       SET col_bool = TRUE,
+       SET col_bool = TRUE::boolean,
            col_int = 1,
-           (col1, col_bool) = ROW(2, 'two')
+           (col1, col_bool) = ROW(2, 'two'::text)
        WHERE table1.col1 > 2
 RETURNING table1.col1 AS "table1.col1",
           table1.col_bool AS "table1.col_bool";
@@ -192,9 +191,9 @@ INSERT INTO db.table1 (col1, col_bool)
 VALUES ('one', 'two'),
        ('1', '2')
 ON CONFLICT ON CONSTRAINT idk_primary_key DO UPDATE
-       SET col_bool = FALSE,
+       SET col_bool = FALSE::boolean,
            col_int = 1,
-           (col1, col_bool) = ROW(2, 'two')
+           (col1, col_bool) = ROW(2, 'two'::text)
        WHERE table1.col1 > 2
 RETURNING table1.col1 AS "table1.col1",
           table1.col_bool AS "table1.col_bool";

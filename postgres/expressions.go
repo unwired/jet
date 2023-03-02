@@ -18,7 +18,7 @@ type NumericExpression = jet.NumericExpression
 // IntegerExpression interface
 type IntegerExpression = jet.IntegerExpression
 
-//FloatExpression is interface
+// FloatExpression is interface
 type FloatExpression = jet.FloatExpression
 
 // TimeExpression interface
@@ -100,7 +100,7 @@ var (
 	RawDate       = jet.RawDate
 )
 
-// Func can be used to call an custom or as of yet unsupported function in the database.
+// Func can be used to call custom or unsupported database functions.
 var Func = jet.Func
 
 // NewEnumValue creates new named enum value

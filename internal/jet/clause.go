@@ -16,10 +16,35 @@ type ClauseWithProjections interface {
 	Projections() ProjectionList
 }
 
+// OptimizerHint provides a way to optimize query execution per-statement basis
+type OptimizerHint string
+
+type optimizerHints []OptimizerHint
+
+func (o optimizerHints) Serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
+	if len(o) == 0 {
+		return
+	}
+
+	out.WriteString("/*+")
+	for i, hint := range o {
+		if i > 0 {
+			out.WriteByte(' ')
+		}
+
+		out.WriteString(string(hint))
+	}
+	out.WriteString("*/")
+}
+
 // ClauseSelect struct
 type ClauseSelect struct {
-	Distinct       bool
-	ProjectionList []Projection
+	Distinct          bool
+	DistinctOnColumns []ColumnExpression
+	ProjectionList    []Projection
+
+	// MySQL only
+	OptimizerHints optimizerHints
 }
 
 // Projections returns list of projections for select clause
@@ -31,9 +56,16 @@ func (s *ClauseSelect) Projections() ProjectionList {
 func (s *ClauseSelect) Serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
 	out.NewLine()
 	out.WriteString("SELECT")
+	s.OptimizerHints.Serialize(statementType, out, options...)
 
 	if s.Distinct {
 		out.WriteString("DISTINCT")
+	}
+
+	if len(s.DistinctOnColumns) > 0 {
+		out.WriteString("ON (")
+		SerializeColumnExpressions(s.DistinctOnColumns, statementType, out)
+		out.WriteByte(')')
 	}
 
 	if len(s.ProjectionList) == 0 {
@@ -45,6 +77,7 @@ func (s *ClauseSelect) Serialize(statementType StatementType, out *SQLBuilder, o
 
 // ClauseFrom struct
 type ClauseFrom struct {
+	Name   string
 	Tables []Serializer
 }
 
@@ -54,7 +87,11 @@ func (f *ClauseFrom) Serialize(statementType StatementType, out *SQLBuilder, opt
 		return
 	}
 	out.NewLine()
-	out.WriteString("FROM")
+	if f.Name != "" {
+		out.WriteString(f.Name)
+	} else {
+		out.WriteString("FROM")
+	}
 
 	out.IncreaseIdent()
 	for i, table := range f.Tables {
@@ -86,9 +123,9 @@ func (c *ClauseWhere) Serialize(statementType StatementType, out *SQLBuilder, op
 	}
 	out.WriteString("WHERE")
 
-	out.IncreaseIdent()
+	out.IncreaseIdent(6)
 	c.Condition.serialize(statementType, out, NoWrap.WithFallTrough(options)...)
-	out.DecreaseIdent()
+	out.DecreaseIdent(6)
 }
 
 // ClauseGroupBy struct
@@ -217,12 +254,13 @@ func (f *ClauseFor) Serialize(statementType StatementType, out *SQLBuilder, opti
 
 // ClauseSetStmtOperator struct
 type ClauseSetStmtOperator struct {
-	Operator string
-	All      bool
-	Selects  []SerializerStatement
-	OrderBy  ClauseOrderBy
-	Limit    ClauseLimit
-	Offset   ClauseOffset
+	Operator       string
+	All            bool
+	Selects        []SerializerStatement
+	OrderBy        ClauseOrderBy
+	Limit          ClauseLimit
+	Offset         ClauseOffset
+	SkipSelectWrap bool
 }
 
 // Projections returns set of projections for ClauseSetStmtOperator
@@ -242,6 +280,10 @@ func (s *ClauseSetStmtOperator) Serialize(statementType StatementType, out *SQLB
 	for i, selectStmt := range s.Selects {
 		out.NewLine()
 		if i > 0 {
+			if s.SkipSelectWrap {
+				out.NewLine()
+			}
+
 			out.WriteString(s.Operator)
 
 			if s.All {
@@ -254,7 +296,11 @@ func (s *ClauseSetStmtOperator) Serialize(statementType StatementType, out *SQLB
 			panic("jet: select statement of '" + s.Operator + "' is nil")
 		}
 
-		selectStmt.serialize(statementType, out, FallTrough(options)...)
+		if s.SkipSelectWrap {
+			options = append(FallTrough(options), NoWrap)
+		}
+
+		selectStmt.serialize(statementType, out, options...)
 	}
 
 	s.OrderBy.Serialize(statementType, out)
@@ -265,12 +311,16 @@ func (s *ClauseSetStmtOperator) Serialize(statementType StatementType, out *SQLB
 // ClauseUpdate struct
 type ClauseUpdate struct {
 	Table SerializerTable
+
+	// MySQL only
+	OptimizerHints optimizerHints
 }
 
 // Serialize serializes clause into SQLBuilder
 func (u *ClauseUpdate) Serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
 	out.NewLine()
 	out.WriteString("UPDATE")
+	u.OptimizerHints.Serialize(statementType, out, options...)
 
 	if utils.IsNil(u.Table) {
 		panic("jet: table to update is nil")
@@ -321,6 +371,9 @@ func (s *SetClause) Serialize(statementType StatementType, out *SQLBuilder, opti
 type ClauseInsert struct {
 	Table   SerializerTable
 	Columns []Column
+
+	// MySQL only
+	OptimizerHints optimizerHints
 }
 
 // GetColumns gets list of columns for insert
@@ -334,12 +387,14 @@ func (i *ClauseInsert) GetColumns() []Column {
 
 // Serialize serializes clause into SQLBuilder
 func (i *ClauseInsert) Serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
-	out.NewLine()
-	out.WriteString("INSERT INTO")
-
 	if utils.IsNil(i.Table) {
 		panic("jet: table is nil for INSERT clause")
 	}
+
+	out.NewLine()
+	out.WriteString("INSERT")
+	i.OptimizerHints.Serialize(statementType, out, options...)
+	out.WriteString("INTO")
 
 	i.Table.serialize(statementType, out)
 
@@ -360,10 +415,6 @@ type ClauseValuesQuery struct {
 
 // Serialize serializes clause into SQLBuilder
 func (v *ClauseValuesQuery) Serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
-	if len(v.Rows) == 0 && v.Query == nil {
-		panic("jet: VALUES or QUERY has to be specified for INSERT statement")
-	}
-
 	if len(v.Rows) > 0 && v.Query != nil {
 		panic("jet: VALUES or QUERY has to be specified for INSERT statement")
 	}
@@ -375,6 +426,7 @@ func (v *ClauseValuesQuery) Serialize(statementType StatementType, out *SQLBuild
 // ClauseValues struct
 type ClauseValues struct {
 	Rows [][]Serializer
+	As   string
 }
 
 // Serialize serializes clause into SQLBuilder
@@ -400,12 +452,19 @@ func (v *ClauseValues) Serialize(statementType StatementType, out *SQLBuilder, o
 
 		out.WriteByte(')')
 	}
+
+	if len(v.As) > 0 {
+		out.WriteString("AS")
+		out.WriteIdentifier(v.As)
+	}
+
 	out.DecreaseIdent(7)
 }
 
 // ClauseQuery struct
 type ClauseQuery struct {
-	Query SerializerStatement
+	Query          SerializerStatement
+	SkipSelectWrap bool
 }
 
 // Serialize serializes clause into SQLBuilder
@@ -414,23 +473,27 @@ func (v *ClauseQuery) Serialize(statementType StatementType, out *SQLBuilder, op
 		return
 	}
 
-	v.Query.serialize(statementType, out, FallTrough(options)...)
+	if v.SkipSelectWrap {
+		options = append(FallTrough(options), NoWrap)
+	}
+
+	v.Query.serialize(statementType, out, options...)
 }
 
 // ClauseDelete struct
 type ClauseDelete struct {
 	Table SerializerTable
+
+	// MySQL only
+	OptimizerHints optimizerHints
 }
 
 // Serialize serializes clause into SQLBuilder
 func (d *ClauseDelete) Serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
 	out.NewLine()
-	out.WriteString("DELETE FROM")
-
-	if d.Table == nil {
-		panic("jet: nil table in DELETE clause")
-	}
-
+	out.WriteString("DELETE")
+	d.OptimizerHints.Serialize(statementType, out, options...)
+	out.WriteString("FROM")
 	d.Table.serialize(statementType, out, FallTrough(options)...)
 }
 
@@ -560,4 +623,27 @@ type KeywordClause struct {
 // Serialize for KeywordClause
 func (k KeywordClause) Serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
 	k.serialize(statementType, out, FallTrough(options)...)
+}
+
+// ClauseReturning  type
+type ClauseReturning struct {
+	ProjectionList []Projection
+}
+
+// Serialize for ClauseReturning
+func (r *ClauseReturning) Serialize(statementType StatementType, out *SQLBuilder, options ...SerializeOption) {
+	if len(r.ProjectionList) == 0 {
+		return
+	}
+
+	out.NewLine()
+	out.WriteString("RETURNING")
+	out.IncreaseIdent()
+	out.WriteProjections(statementType, r.ProjectionList)
+	out.DecreaseIdent()
+}
+
+// Projections for ClauseReturning
+func (r ClauseReturning) Projections() ProjectionList {
+	return r.ProjectionList
 }

@@ -1,14 +1,17 @@
 package mysql
 
 import (
-	"github.com/go-jet/jet/v2/generator/mysql"
-	"github.com/go-jet/jet/v2/internal/testutils"
-	"github.com/go-jet/jet/v2/tests/dbconfig"
-	"github.com/stretchr/testify/require"
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/go-jet/jet/v2/generator/mysql"
+	"github.com/go-jet/jet/v2/internal/testutils"
+	"github.com/go-jet/jet/v2/tests/dbconfig"
 )
 
 const genTestDirRoot = "./.gentestdata3"
@@ -17,16 +20,19 @@ const genTestDir3 = "./.gentestdata3/mysql"
 func TestGenerator(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
-		err := mysql.Generate(genTestDir3, mysql.DBConnection{
-			Host:     dbconfig.MySqLHost,
-			Port:     dbconfig.MySQLPort,
-			User:     dbconfig.MySQLUser,
-			Password: dbconfig.MySQLPassword,
-			DBName:   "dvds",
-		})
+		err := mysql.Generate(genTestDir3, dbConnection("dvds"))
 
 		require.NoError(t, err)
 
+		assertGeneratedFiles(t)
+	}
+
+	for i := 0; i < 3; i++ {
+		dsn := dbconfig.MySQLConnectionString(sourceIsMariaDB(), "dvds")
+
+		err := mysql.GenerateDSN(dsn, genTestDir3)
+
+		require.NoError(t, err)
 		assertGeneratedFiles(t)
 	}
 
@@ -38,8 +44,27 @@ func TestCmdGenerator(t *testing.T) {
 	err := os.RemoveAll(genTestDir3)
 	require.NoError(t, err)
 
-	cmd := exec.Command("jet", "-source=MySQL", "-dbname=dvds", "-host=localhost", "-port=3306",
-		"-user=jet", "-password=jet", "-path="+genTestDir3)
+	var cmd *exec.Cmd
+
+	if sourceIsMariaDB() {
+		cmd = exec.Command("jet",
+			"-source=MariaDB",
+			"-dbname=dvds",
+			"-host="+dbconfig.MariaDBHost,
+			"-port="+strconv.Itoa(dbconfig.MariaDBPort),
+			"-user="+dbconfig.MariaDBUser,
+			"-password="+dbconfig.MariaDBPassword,
+			"-path="+genTestDir3)
+	} else {
+		cmd = exec.Command("jet",
+			"-source=MySQL",
+			"-dbname=dvds",
+			"-host="+dbconfig.MySqLHost,
+			"-port="+strconv.Itoa(dbconfig.MySQLPort),
+			"-user="+dbconfig.MySQLUser,
+			"-password="+dbconfig.MySQLPassword,
+			"-path="+genTestDir3)
+	}
 
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
@@ -51,6 +76,83 @@ func TestCmdGenerator(t *testing.T) {
 
 	err = os.RemoveAll(genTestDirRoot)
 	require.NoError(t, err)
+
+	// check that generation via DSN works
+	dsn := "mysql://" + dbconfig.MySQLConnectionString(sourceIsMariaDB(), "dvds")
+	cmd = exec.Command("jet", "-dsn="+dsn, "-path="+genTestDir3)
+
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+
+	err = cmd.Run()
+	require.NoError(t, err)
+}
+
+func TestIgnoreTablesViewsEnums(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "with dsn",
+			args: []string{
+				"-dsn=mysql://" + dbconfig.MySQLConnectionString(sourceIsMariaDB(), "dvds"),
+				"-ignore-tables=actor,ADDRESS,Category, city ,country,staff,store,rental",
+				"-ignore-views=actor_info,CUSTomER_LIST, film_list",
+				"-ignore-enums=film_list_rating,film_rating",
+				"-path=" + genTestDir3,
+			},
+		},
+		{
+			name: "without dsn",
+			args: []string{
+				"-source=MySQL",
+				"-dbname=dvds",
+				"-host=" + dbconfig.MySqLHost,
+				"-port=" + strconv.Itoa(dbconfig.MySQLPort),
+				"-user=" + dbconfig.MySQLUser,
+				"-password=" + dbconfig.MySQLPassword,
+				"-ignore-tables=actor,ADDRESS,Category, city ,country,staff,store,rental",
+				"-ignore-views=actor_info,CUSTomER_LIST, film_list",
+				"-ignore-enums=film_list_rating,film_rating",
+				"-path=" + genTestDir3,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("jet", tt.args...)
+
+			cmd.Stderr = os.Stderr
+			cmd.Stdout = os.Stdout
+
+			err := cmd.Run()
+			require.NoError(t, err)
+
+			tableSQLBuilderFiles, err := ioutil.ReadDir(genTestDir3 + "/dvds/table")
+			require.NoError(t, err)
+			testutils.AssertFileNamesEqual(t, tableSQLBuilderFiles, "customer.go", "film.go", "film_actor.go",
+				"film_category.go", "film_text.go", "inventory.go", "language.go", "payment.go", "table.go")
+
+			viewSQLBuilderFiles, err := ioutil.ReadDir(genTestDir3 + "/dvds/view")
+			require.NoError(t, err)
+			testutils.AssertFileNamesEqual(t, viewSQLBuilderFiles, "nicer_but_slower_film_list.go",
+				"sales_by_film_category.go", "sales_by_store.go", "staff_list.go", "view.go")
+
+			enumFiles, err := ioutil.ReadDir(genTestDir3 + "/dvds/enum")
+			require.NoError(t, err)
+			testutils.AssertFileNamesEqual(t, enumFiles, "nicer_but_slower_film_list_rating.go")
+
+			modelFiles, err := ioutil.ReadDir(genTestDir3 + "/dvds/model")
+			require.NoError(t, err)
+
+			testutils.AssertFileNamesEqual(t, modelFiles,
+				"customer.go", "film.go", "film_actor.go", "film_category.go", "film_text.go", "inventory.go", "language.go",
+				"payment.go", "nicer_but_slower_film_list_rating.go", "nicer_but_slower_film_list.go", "sales_by_film_category.go",
+				"sales_by_store.go", "staff_list.go")
+		})
+	}
 }
 
 func assertGeneratedFiles(t *testing.T) {
@@ -60,18 +162,20 @@ func assertGeneratedFiles(t *testing.T) {
 
 	testutils.AssertFileNamesEqual(t, tableSQLBuilderFiles, "actor.go", "address.go", "category.go", "city.go", "country.go",
 		"customer.go", "film.go", "film_actor.go", "film_category.go", "film_text.go", "inventory.go", "language.go",
-		"payment.go", "rental.go", "staff.go", "store.go")
+		"payment.go", "rental.go", "staff.go", "store.go", "table.go")
 
 	testutils.AssertFileContent(t, genTestDir3+"/dvds/table/actor.go", actorSQLBuilderFile)
+	testutils.AssertFileContent(t, genTestDir3+"/dvds/table/table.go", tableSetSchemaFile)
 
 	// View SQL Builder files
 	viewSQLBuilderFiles, err := ioutil.ReadDir(genTestDir3 + "/dvds/view")
 	require.NoError(t, err)
 
 	testutils.AssertFileNamesEqual(t, viewSQLBuilderFiles, "actor_info.go", "film_list.go", "nicer_but_slower_film_list.go",
-		"sales_by_film_category.go", "customer_list.go", "sales_by_store.go", "staff_list.go")
+		"sales_by_film_category.go", "customer_list.go", "sales_by_store.go", "staff_list.go", "view.go")
 
 	testutils.AssertFileContent(t, genTestDir3+"/dvds/view/actor_info.go", actorInfoSQLBuilderFile)
+	testutils.AssertFileContent(t, genTestDir3+"/dvds/view/view.go", viewSetSchemaFile)
 
 	// Enums SQL Builder files
 	enumFiles, err := ioutil.ReadDir(genTestDir3 + "/dvds/enum")
@@ -137,7 +241,7 @@ import (
 
 var Actor = newActorTable("dvds", "actor", "")
 
-type ActorTable struct {
+type actorTable struct {
 	mysql.Table
 
 	//Columns
@@ -150,17 +254,40 @@ type ActorTable struct {
 	MutableColumns mysql.ColumnList
 }
 
+type ActorTable struct {
+	actorTable
+
+	NEW actorTable
+}
+
 // AS creates new ActorTable with assigned alias
-func (a ActorTable) AS(alias string) ActorTable {
+func (a ActorTable) AS(alias string) *ActorTable {
 	return newActorTable(a.SchemaName(), a.TableName(), alias)
 }
 
 // Schema creates new ActorTable with assigned schema name
-func (a ActorTable) FromSchema(schemaName string) ActorTable {
+func (a ActorTable) FromSchema(schemaName string) *ActorTable {
 	return newActorTable(schemaName, a.TableName(), a.Alias())
 }
 
-func newActorTable(schemaName, tableName, alias string) ActorTable {
+// WithPrefix creates new ActorTable with assigned table prefix
+func (a ActorTable) WithPrefix(prefix string) *ActorTable {
+	return newActorTable(a.SchemaName(), prefix+a.TableName(), a.TableName())
+}
+
+// WithSuffix creates new ActorTable with assigned table suffix
+func (a ActorTable) WithSuffix(suffix string) *ActorTable {
+	return newActorTable(a.SchemaName(), a.TableName()+suffix, a.TableName())
+}
+
+func newActorTable(schemaName, tableName, alias string) *ActorTable {
+	return &ActorTable{
+		actorTable: newActorTableImpl(schemaName, tableName, alias),
+		NEW:        newActorTableImpl("", "new", ""),
+	}
+}
+
+func newActorTableImpl(schemaName, tableName, alias string) actorTable {
 	var (
 		ActorIDColumn    = mysql.IntegerColumn("actor_id")
 		FirstNameColumn  = mysql.StringColumn("first_name")
@@ -170,7 +297,7 @@ func newActorTable(schemaName, tableName, alias string) ActorTable {
 		mutableColumns   = mysql.ColumnList{FirstNameColumn, LastNameColumn, LastUpdateColumn}
 	)
 
-	return ActorTable{
+	return actorTable{
 		Table: mysql.NewTable(schemaName, tableName, alias, allColumns...),
 
 		//Columns
@@ -182,6 +309,39 @@ func newActorTable(schemaName, tableName, alias string) ActorTable {
 		AllColumns:     allColumns,
 		MutableColumns: mutableColumns,
 	}
+}
+`
+
+var tableSetSchemaFile = `
+//
+// Code generated by go-jet DO NOT EDIT.
+//
+// WARNING: Changes to this file may cause incorrect behavior
+// and will be lost if the code is regenerated
+//
+
+package table
+
+// UseSchema changes all global tables/views with the value returned
+// returned by calling FromSchema on them. Passing an empty string to this function
+// will cause queries to be generated without any table/view alias.
+func UseSchema(schema string) {
+	Actor = Actor.FromSchema(schema)
+	Address = Address.FromSchema(schema)
+	Category = Category.FromSchema(schema)
+	City = City.FromSchema(schema)
+	Country = Country.FromSchema(schema)
+	Customer = Customer.FromSchema(schema)
+	Film = Film.FromSchema(schema)
+	FilmActor = FilmActor.FromSchema(schema)
+	FilmCategory = FilmCategory.FromSchema(schema)
+	FilmText = FilmText.FromSchema(schema)
+	Inventory = Inventory.FromSchema(schema)
+	Language = Language.FromSchema(schema)
+	Payment = Payment.FromSchema(schema)
+	Rental = Rental.FromSchema(schema)
+	Staff = Staff.FromSchema(schema)
+	Store = Store.FromSchema(schema)
 }
 `
 
@@ -223,7 +383,7 @@ import (
 
 var ActorInfo = newActorInfoTable("dvds", "actor_info", "")
 
-type ActorInfoTable struct {
+type actorInfoTable struct {
 	mysql.Table
 
 	//Columns
@@ -236,17 +396,40 @@ type ActorInfoTable struct {
 	MutableColumns mysql.ColumnList
 }
 
+type ActorInfoTable struct {
+	actorInfoTable
+
+	NEW actorInfoTable
+}
+
 // AS creates new ActorInfoTable with assigned alias
-func (a ActorInfoTable) AS(alias string) ActorInfoTable {
+func (a ActorInfoTable) AS(alias string) *ActorInfoTable {
 	return newActorInfoTable(a.SchemaName(), a.TableName(), alias)
 }
 
 // Schema creates new ActorInfoTable with assigned schema name
-func (a ActorInfoTable) FromSchema(schemaName string) ActorInfoTable {
+func (a ActorInfoTable) FromSchema(schemaName string) *ActorInfoTable {
 	return newActorInfoTable(schemaName, a.TableName(), a.Alias())
 }
 
-func newActorInfoTable(schemaName, tableName, alias string) ActorInfoTable {
+// WithPrefix creates new ActorInfoTable with assigned table prefix
+func (a ActorInfoTable) WithPrefix(prefix string) *ActorInfoTable {
+	return newActorInfoTable(a.SchemaName(), prefix+a.TableName(), a.TableName())
+}
+
+// WithSuffix creates new ActorInfoTable with assigned table suffix
+func (a ActorInfoTable) WithSuffix(suffix string) *ActorInfoTable {
+	return newActorInfoTable(a.SchemaName(), a.TableName()+suffix, a.TableName())
+}
+
+func newActorInfoTable(schemaName, tableName, alias string) *ActorInfoTable {
+	return &ActorInfoTable{
+		actorInfoTable: newActorInfoTableImpl(schemaName, tableName, alias),
+		NEW:            newActorInfoTableImpl("", "new", ""),
+	}
+}
+
+func newActorInfoTableImpl(schemaName, tableName, alias string) actorInfoTable {
 	var (
 		ActorIDColumn   = mysql.IntegerColumn("actor_id")
 		FirstNameColumn = mysql.StringColumn("first_name")
@@ -256,7 +439,7 @@ func newActorInfoTable(schemaName, tableName, alias string) ActorInfoTable {
 		mutableColumns  = mysql.ColumnList{ActorIDColumn, FirstNameColumn, LastNameColumn, FilmInfoColumn}
 	)
 
-	return ActorInfoTable{
+	return actorInfoTable{
 		Table: mysql.NewTable(schemaName, tableName, alias, allColumns...),
 
 		//Columns
@@ -268,5 +451,28 @@ func newActorInfoTable(schemaName, tableName, alias string) ActorInfoTable {
 		AllColumns:     allColumns,
 		MutableColumns: mutableColumns,
 	}
+}
+`
+var viewSetSchemaFile = `
+//
+// Code generated by go-jet DO NOT EDIT.
+//
+// WARNING: Changes to this file may cause incorrect behavior
+// and will be lost if the code is regenerated
+//
+
+package view
+
+// UseSchema changes all global tables/views with the value returned
+// returned by calling FromSchema on them. Passing an empty string to this function
+// will cause queries to be generated without any table/view alias.
+func UseSchema(schema string) {
+	ActorInfo = ActorInfo.FromSchema(schema)
+	CustomerList = CustomerList.FromSchema(schema)
+	FilmList = FilmList.FromSchema(schema)
+	NicerButSlowerFilmList = NicerButSlowerFilmList.FromSchema(schema)
+	SalesByFilmCategory = SalesByFilmCategory.FromSchema(schema)
+	SalesByStore = SalesByStore.FromSchema(schema)
+	StaffList = StaffList.FromSchema(schema)
 }
 `

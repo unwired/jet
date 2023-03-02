@@ -2,10 +2,12 @@ package testutils
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/go-jet/jet/v2/internal/jet"
-	"github.com/go-jet/jet/v2/internal/utils"
+	"github.com/go-jet/jet/v2/internal/utils/throw"
 	"github.com/go-jet/jet/v2/qrm"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -20,6 +22,23 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+// UnixTimeComparer will compare time equality while ignoring time zone
+var UnixTimeComparer = cmp.Comparer(func(t1, t2 time.Time) bool {
+	return t1.Unix() == t2.Unix()
+})
+
+// AssertExecAndRollback will execute and rollback statement in sql transaction
+func AssertExecAndRollback(t *testing.T, stmt jet.Statement, db *sql.DB, rowsAffected ...int64) {
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	defer func() {
+		err := tx.Rollback()
+		require.NoError(t, err)
+	}()
+
+	AssertExec(t, stmt, tx, rowsAffected...)
+}
+
 // AssertExec assert statement execution for successful execution and number of rows affected
 func AssertExec(t *testing.T, stmt jet.Statement, db qrm.DB, rowsAffected ...int64) {
 	res, err := stmt.Exec(db)
@@ -33,9 +52,28 @@ func AssertExec(t *testing.T, stmt jet.Statement, db qrm.DB, rowsAffected ...int
 	}
 }
 
+// ExecuteInTxAndRollback will execute function in sql transaction and then rollback transaction
+func ExecuteInTxAndRollback(t *testing.T, db *sql.DB, f func(tx *sql.Tx)) {
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	defer func() {
+		err := tx.Rollback()
+		require.NoError(t, err)
+	}()
+
+	f(tx)
+}
+
 // AssertExecErr assert statement execution for failed execution with error string errorStr
 func AssertExecErr(t *testing.T, stmt jet.Statement, db qrm.DB, errorStr string) {
 	_, err := stmt.Exec(db)
+
+	require.Error(t, err, errorStr)
+}
+
+// AssertExecContextErr assert statement execution for failed execution with error string errorStr
+func AssertExecContextErr(ctx context.Context, t *testing.T, stmt jet.Statement, db qrm.DB, errorStr string) {
+	_, err := stmt.ExecContext(ctx, db)
 
 	require.Error(t, err, errorStr)
 }
@@ -51,12 +89,19 @@ func PrintJson(v interface{}) {
 	fmt.Println(string(jsonText))
 }
 
+// ToJSON converts v into json string
+func ToJSON(v interface{}) string {
+	jsonText, _ := json.MarshalIndent(v, "", "\t")
+	return string(jsonText)
+}
+
 // AssertJSON check if data json output is the same as expectedJSON
 func AssertJSON(t *testing.T, data interface{}, expectedJSON string) {
 	jsonData, err := json.MarshalIndent(data, "", "\t")
 	require.NoError(t, err)
 
-	require.Equal(t, "\n"+string(jsonData)+"\n", expectedJSON)
+	dataJson := "\n" + string(jsonData) + "\n"
+	require.Equal(t, dataJson, expectedJSON)
 }
 
 // SaveJSONFile saves v as json at testRelativePath
@@ -66,7 +111,7 @@ func SaveJSONFile(v interface{}, testRelativePath string) {
 	filePath := getFullPath(testRelativePath)
 	err := ioutil.WriteFile(filePath, jsonText, 0644)
 
-	utils.PanicOnError(err)
+	throw.OnError(err)
 }
 
 // AssertJSONFile check if data json representation is the same as json at testRelativePath
@@ -113,7 +158,7 @@ func AssertDebugStatementSql(t *testing.T, query jet.Statement, expectedQuery st
 	_, args := query.Sql()
 
 	if len(expectedArgs) > 0 {
-		AssertDeepEqual(t, args, expectedArgs, "arguments are not equal")
+		AssertDeepEqual(t, args, expectedArgs)
 	}
 
 	debugSql := query.DebugSql()
@@ -223,9 +268,9 @@ func AssertFileNamesEqual(t *testing.T, fileInfos []os.FileInfo, fileNames ...st
 }
 
 // AssertDeepEqual checks if actual and expected objects are deeply equal.
-func AssertDeepEqual(t *testing.T, actual, expected interface{}, msg ...string) {
-	if !assert.True(t, cmp.Equal(actual, expected), msg) {
-		printDiff(actual, expected)
+func AssertDeepEqual(t *testing.T, actual, expected interface{}, option ...cmp.Option) {
+	if !assert.True(t, cmp.Equal(actual, expected, option...)) {
+		printDiff(actual, expected, option...)
 		t.FailNow()
 	}
 }
@@ -237,7 +282,8 @@ func assertQueryString(t *testing.T, actual, expected string) {
 	}
 }
 
-func printDiff(actual, expected interface{}) {
+func printDiff(actual, expected interface{}, options ...cmp.Option) {
+	fmt.Println(cmp.Diff(actual, expected, options...))
 	fmt.Println("Actual: ")
 	fmt.Println(actual)
 	fmt.Println("Expected: ")

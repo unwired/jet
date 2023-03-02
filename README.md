@@ -2,55 +2,47 @@
 
 [![CircleCI](https://circleci.com/gh/go-jet/jet/tree/master.svg?style=svg&circle-token=97f255c6a4a3ab6590ea2e9195eb3ebf9f97b4a7)](https://circleci.com/gh/go-jet/jet/tree/develop)
 [![codecov](https://codecov.io/gh/go-jet/jet/branch/master/graph/badge.svg)](https://codecov.io/gh/go-jet/jet)
-[![Go Report Card](https://goreportcard.com/badge/github.com/go-jet/jet)](https://goreportcard.com/report/github.com/go-jet/jet)
-[![Documentation](https://godoc.org/github.com/go-jet/jet?status.svg)](http://godoc.org/github.com/go-jet/jet)
-[![GitHub release](https://img.shields.io/github/release/go-jet/jet.svg)](https://github.com/go-jet/jet/v2/releases)
-[![Gitter](https://badges.gitter.im/go-jet/community.svg)](https://gitter.im/go-jet/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![Go Report Card](https://goreportcard.com/badge/github.com/go-jet/jet)](https://goreportcard.com/report/github.com/go-jet/jet/v2)
+[![Documentation](https://godoc.org/github.com/go-jet/jet?status.svg)](http://godoc.org/github.com/go-jet/jet/v2)
+[![GitHub release](https://img.shields.io/github/release/go-jet/jet.svg)](https://github.com/go-jet/jet/releases)
 
 Jet is a complete solution for efficient and high performance database access, consisting of type-safe SQL builder 
 with code generation and automatic query result data mapping.  
-Jet currently supports `PostgreSQL`, `MySQL` and `MariaDB`. Future releases will add support for additional databases.
+Jet currently supports `PostgreSQL`, `MySQL`, `CockroachDB`, `MariaDB` and `SQLite`. Future releases will add support for additional databases.
 
 ![jet](https://github.com/go-jet/jet/wiki/image/jet.png)  
-Jet is the easiest and the fastest way to write complex type-safe SQL queries as a Go code and map database query result 
+Jet is the easiest, and the fastest way to write complex type-safe SQL queries as a Go code and map database query result 
 into complex object composition. __It is not an ORM.__ 
 
 ## Motivation
 https://medium.com/@go.jet/jet-5f3667efa0cc
 
 ## Contents
-   - [Features](#features)
-   - [Getting Started](#getting-started)
-      - [Prerequisites](#prerequisites)
-      - [Installation](#installation)
-      - [Quick Start](#quick-start)
-         - [Generate sql builder and model files](#generate-sql-builder-and-model-files)
-         - [Lets write some SQL queries in Go](#lets-write-some-sql-queries-in-go)
-         - [Execute query and store result](#execute-query-and-store-result)
-   - [Benefits](#benefits)
-   - [Dependencies](#dependencies)
-   - [Versioning](#versioning)
-   - [License](#license)
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Quick Start](#quick-start)
+     - [Generate sql builder and model types](#generate-sql-builder-and-model-types)
+     - [Lets write some SQL queries in Go](#lets-write-some-sql-queries-in-go)
+     - [Execute query and store result](#execute-query-and-store-result)
+- [Benefits](#benefits)
+- [Dependencies](#dependencies)
+- [Versioning](#versioning)
+- [License](#license)
 
 ## Features
- 1) Auto-generated type-safe SQL Builder  
- - PostgreSQL:
-    * [SELECT](https://github.com/go-jet/jet/wiki/SELECT) `(DISTINCT, FROM, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, FOR, UNION, INTERSECT, EXCEPT, WINDOW, sub-queries)`
-    * [INSERT](https://github.com/go-jet/jet/wiki/INSERT) `(VALUES, MODEL, MODELS, QUERY, ON_CONFLICT, RETURNING)`, 
+ 1) Auto-generated type-safe SQL Builder. Statements supported:
+    * [SELECT](https://github.com/go-jet/jet/wiki/SELECT) `(DISTINCT, FROM, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, FOR, LOCK_IN_SHARE_MODE, UNION, INTERSECT, EXCEPT, WINDOW, sub-queries)`
+    * [INSERT](https://github.com/go-jet/jet/wiki/INSERT) `(VALUES, MODEL, MODELS, QUERY, ON_CONFLICT/ON_DUPLICATE_KEY_UPDATE, RETURNING)`, 
     * [UPDATE](https://github.com/go-jet/jet/wiki/UPDATE) `(SET, MODEL, WHERE, RETURNING)`, 
-    * [DELETE](https://github.com/go-jet/jet/wiki/DELETE) `(WHERE, RETURNING)`,
-    * [LOCK](https://github.com/go-jet/jet/wiki/LOCK) `(IN, NOWAIT)`  
+    * [DELETE](https://github.com/go-jet/jet/wiki/DELETE) `(WHERE, ORDER_BY, LIMIT, RETURNING)`,
+    * [LOCK](https://github.com/go-jet/jet/wiki/LOCK) `(IN, NOWAIT)`, `(READ, WRITE)`
     * [WITH](https://github.com/go-jet/jet/wiki/WITH)
- - MySQL and MariaDB:
-    * [SELECT](https://github.com/go-jet/jet/wiki/SELECT) `(DISTINCT, FROM, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, FOR, UNION, LOCK_IN_SHARE_MODE, WINDOW, sub-queries)`
-    * [INSERT](https://github.com/go-jet/jet/wiki/INSERT) `(VALUES, MODEL, MODELS, ON_DUPLICATE_KEY_UPDATE, query)`, 
-    * [UPDATE](https://github.com/go-jet/jet/wiki/UPDATE) `(SET, MODEL, WHERE)`, 
-    * [DELETE](https://github.com/go-jet/jet/wiki/DELETE) `(WHERE, ORDER_BY, LIMIT)`,
-    * [LOCK](https://github.com/go-jet/jet/wiki/LOCK) `(READ, WRITE)`
-    * [WITH](https://github.com/go-jet/jet/wiki/WITH)
+    
  2) Auto-generated Data Model types - Go types mapped to database type (table, view or enum), used to store
- result of database queries. Can be combined to create desired query result destination. 
- 3) Query execution with result mapping to arbitrary destination structure. 
+ result of database queries. Can be combined to create complex query result destination. 
+ 3) Query execution with result mapping to arbitrary destination. 
 
 ## Getting Started
 
@@ -67,43 +59,39 @@ Use the command bellow to add jet as a dependency into `go.mod` project:
 $ go get -u github.com/go-jet/jet/v2
 ```
 
-Jet generator can be install in the following ways:
+Jet generator can be installed in one of the following ways:
 
-1) Install jet generator to GOPATH/bin folder:
+- (Go1.16+) Install jet generator using go install:
 ```sh
-cd $GOPATH/src/ && GO111MODULE=off go get -u github.com/go-jet/jet/cmd/jet
+go install github.com/go-jet/jet/v2/cmd/jet@latest
 ```
-*Make sure GOPATH/bin folder is added to the PATH environment variable.*
+*Jet generator is installed to the directory named by the GOBIN environment variable,
+which defaults to $GOPATH/bin or $HOME/go/bin if the GOPATH environment variable is not set.*
 
-2) Install jet generator to specific folder:
-
+- Install jet generator to specific folder:
 ```sh
 git clone https://github.com/go-jet/jet.git
 cd jet && go build -o dir_path ./cmd/jet
 ```
 *Make sure `dir_path` folder is added to the PATH environment variable.*
 
-3) (Go1.16+) Install jet generator using go install:
-```sh
-go install github.com/go-jet/jet/v2/cmd/jet@latest
-```
-*Jet generator is installed to the directory named by the GOBIN environment variable, 
-which defaults to $GOPATH/bin or $HOME/go/bin if the GOPATH environment variable is not set.*
+
 
 ### Quick Start
-For this quick start example we will use PostgreSQL sample _'dvd rental'_ database. Full database dump can be found in [./tests/testdata/init/postgres/dvds.sql](./tests/testdata/init/postgres/dvds.sql).
-Schema diagram of interest for example can be found [here](./examples/quick-start/diagram.png).
+For this quick start example we will use PostgreSQL sample _'dvd rental'_ database. Full database dump can be found in
+[./tests/testdata/init/postgres/dvds.sql](https://github.com/go-jet/jet-test-data/blob/master/init/postgres/dvds.sql).
+Schema diagram of interest can be found [here](./examples/quick-start/diagram.png).
 
-#### Generate SQL Builder and Model files
-To generate jet SQL Builder and Data Model files from postgres database, we need to call `jet` generator with postgres 
-connection parameters and root destination folder path for generated files.\
-Assuming we are running local postgres database, with user `jetuser`, user password `jetpass`, database `jetdb` and 
+#### Generate SQL Builder and Model types
+To generate jet SQL Builder and Data Model types from running postgres database, we need to call `jet` generator with postgres 
+connection parameters and destination folder path. 
+Assuming we are running local postgres database, with user `user`, user password `pass`, database `jetdb` and 
 schema `dvds` we will use this command:
 ```sh
-jet -source=PostgreSQL -host=localhost -port=5432 -user=jetuser -password=jetpass -dbname=jetdb -schema=dvds -path=./.gen
+jet -dsn=postgresql://user:pass@localhost:5432/jetdb?sslmode=disable -schema=dvds -path=./.gen
 ```
 ```sh
-Connecting to postgres database: host=localhost port=5432 user=jetuser password=jetpass dbname=jetdb sslmode=disable 
+Connecting to postgres database: postgresql://user:pass@localhost:5432/jetdb?sslmode=disable 
 Retrieving schema information...
 	FOUND 15 table(s), 7 view(s), 1 enum(s)
 Cleaning up destination directory...
@@ -115,14 +103,20 @@ Generating view model files...
 Generating enum model files...
 Done
 ```
-Procedure is similar for MySQL or MariaDB, except source should be replaced with `MySql` or `MariaDB` and schema name should 
-be omitted (both databases doesn't have schema support).   
+Procedure is similar for MySQL, CockroachDB, MariaDB and SQLite. For example:
+```sh
+jet -source=mysql -dsn="user:pass@tcp(localhost:3306)/dbname" -path=./gen
+jet -dsn=postgres://user:pass@localhost:26257/jetdb?sslmode=disable -schema=dvds -path=./.gen  #cockroachdb
+jet -dsn="mariadb://user:pass@tcp(localhost:3306)/dvds" -path=./gen              # source flag can be omitted if data source appears in dsn
+jet -source=sqlite -dsn="/path/to/sqlite/database/file" -schema=dvds -path=./gen
+jet -dsn="file:///path/to/sqlite/database/file" -schema=dvds -path=./gen         # sqlite database assumed for 'file' data sources
+```
 _*User has to have a permission to read information schema tables._
 
 As command output suggest, Jet will:
 - connect to postgres database and retrieve information about the _tables_, _views_ and _enums_ of `dvds` schema
 - delete everything in schema destination folder -  `./gen/jetdb/dvds`,   
-- and finally generate SQL Builder and Model files for each schema table, view and enum.  
+- and finally generate SQL Builder and Model types for each schema table, view and enum.  
 
 
 Generated files folder structure will look like this:
@@ -147,14 +141,14 @@ Generated files folder structure will look like this:
 |           |   |-- mpaa_rating.go
 |           |   ...
 ```
-Types from `table`, `view` and `enum` are used to write type safe SQL in Go, and `model` types can be combined to store 
+Types from `table`, `view` and `enum` are used to write type safe SQL in Go, and `model` types are combined to store 
 results of the SQL queries.
 
 
 
-#### Lets write some SQL queries in Go
+#### Let's write some SQL queries in Go
 
-First we need to import jet and generated files from previous step:
+First we need to import postgres SQLBuilder and generated packages from the previous step:
 ```go
 import (
 	// dot import so go code would resemble as much as native SQL
@@ -165,13 +159,13 @@ import (
 	"github.com/go-jet/jet/v2/examples/quick-start/gen/jetdb/dvds/model"
 )
 ```
-Lets say we want to retrieve the list of all _actors_ that acted in _films_ longer than 180 minutes, _film language_ is 'English' 
+Let's say we want to retrieve the list of all _actors_ that acted in _films_ longer than 180 minutes, _film language_ is 'English' 
 and _film category_ is not 'Action'.  
-```java
+```golang
 stmt := SELECT(
     Actor.ActorID, Actor.FirstName, Actor.LastName, Actor.LastUpdate,  // or just Actor.AllColumns
     Film.AllColumns,                                                  
-    Language.AllColumns,
+    Language.AllColumns.Except(Language.LastUpdate),  // all language columns except last_update 
     Category.AllColumns,
 ).FROM(
     Actor.
@@ -189,17 +183,17 @@ stmt := SELECT(
     Film.FilmID.ASC(),
 )
 ```
-_Package(dot) import is used so that statement would resemble as much as possible as native SQL._  
+_Package(dot) import is used, so the statements look as close as possible to the native SQL._  
 Note that every column has a type. String column `Language.Name` and `Category.Name` can be compared only with 
 string columns and expressions. `Actor.ActorID`, `FilmActor.ActorID`, `Film.Length` are integer columns 
 and can be compared only with integer columns and expressions.
 
-__How to get parametrized SQL query from statement?__
+__How to get a parametrized SQL query from the statement?__
 ```go
 query, args := stmt.Sql()
 ```
-query - parametrized query\
-args - parameters for the query
+query - parametrized query  
+args - query parameters 
 
 <details>
   <summary>Click to see `query` and `args`</summary>
@@ -248,7 +242,7 @@ __How to get debug SQL from statement?__
  ```go
 debugSql := stmt.DebugSql()
 ```
-debugSql - query string that can be copy pasted to sql editor and executed. __It's not intended to be used in production!!!__
+debugSql - this query string can be copy-pasted to sql editor and executed. __It is not intended to be used in production. For debug purposes only!!!__
 
 <details>
   <summary>Click to see debug sql</summary>
@@ -291,14 +285,17 @@ ORDER BY actor.actor_id ASC, film.film_id ASC;
 
 #### Execute query and store result
 
-Well formed SQL is just a first half of the job. Lets see how can we make some sense of result set returned executing 
+Well-formed SQL is just a first half of the job. Let's see how can we make some sense of result set returned executing 
 above statement. Usually this is the most complex and tedious work, but with Jet it is the easiest.
 
 First we have to create desired structure to store query result. 
-This is done be combining autogenerated model types or it can be done 
-manually(see [wiki](https://github.com/go-jet/jet/wiki/Query-Result-Mapping-(QRM)) for more information). 
+This is done be combining autogenerated model types, or it can be done 
+by combining custom model types(see [wiki](https://github.com/go-jet/jet/wiki/Query-Result-Mapping-(QRM)#custom-model-types) for more information).  
 
-Let's say this is our desired structure:  
+_Note that it's possible to overwrite default jet generator behavior. All the aspects of generated model and SQLBuilder types can be 
+tailor-made([wiki](https://github.com/go-jet/jet/wiki/Generator#generator-customization))._
+
+Let's say this is our desired structure made of autogenerated types:  
 ```go
 var dest []struct {
     model.Actor
@@ -315,14 +312,14 @@ var dest []struct {
 `Langauge` field is just a single model struct. `Film` can belong to multiple categories.  
 _*There is no limitation of how big or nested destination can be._
 
-Now lets execute a above statement on open database connection (or transaction) db and store result into `dest`.
+Now let's execute above statement on open database connection (or transaction) db and store result into `dest`.
 
 ```go
 err := stmt.Query(db, &dest)
 handleError(err)
 ```
 
-__And thats it.__
+__And that's it.__
   
 `dest` now contains the list of all actors(with list of films acted, where each film has information about language and list of belonging categories) that acted in films longer than 180 minutes, film language is 'English' 
 and film category is not 'Action'.
@@ -358,7 +355,7 @@ fmt.Println(string(jsonText))
 				"Language": {
 					"LanguageID": 1,
 					"Name": "English             ",
-					"LastUpdate": "2006-02-15T10:02:19Z"
+					"LastUpdate": "0001-01-01T00:00:00Z"
 				},
 				"Categories": [
 					{
@@ -393,7 +390,7 @@ fmt.Println(string(jsonText))
 				"Language": {
 					"LanguageID": 1,
 					"Name": "English             ",
-					"LastUpdate": "2006-02-15T10:02:19Z"
+					"LastUpdate": "0001-01-01T00:00:00Z"
 				},
 				"Categories": [
 					{
@@ -524,11 +521,11 @@ found at project [Wiki](https://github.com/go-jet/jet/wiki) page.
 ## Benefits
 
 What are the benefits of writing SQL in Go using Jet?  
-The biggest benefit is speed.  Speed is improved in 3 major areas:
+The biggest benefit is speed. Speed is being improved in 3 major areas:
 
 ##### Speed of development  
 
-Writing SQL queries is faster and easier as the developers have help of SQL code completion and SQL type safety directly from Go.
+Writing SQL queries is faster and easier, as developers will have help of SQL code completion and SQL type safety directly from Go code.
 Automatic scan to arbitrary structure removes a lot of headache and boilerplate code needed to structure database query result.  
 
 ##### Speed of execution
@@ -538,32 +535,34 @@ Jet will always perform better as developers can write complex query and retriev
 Thus handler time lost on latency between server and database can be constant. Handler execution will be proportional 
 only to the query complexity and the number of rows returned from database. 
 
-With Jet it is even possible to join the whole database and store the whole structured result in one database call. 
-This is exactly what is being done in one of the tests: [TestJoinEverything](/tests/postgres/chinook_db_test.go#L40). 
-The whole test database is joined and query result(~10,000 rows) is stored in a structured variable in less than 0.7s. 
+With Jet, it is even possible to join the whole database and store the whole structured result in one database call. 
+This is exactly what is being done in one of the tests: [TestJoinEverything](https://github.com/go-jet/jet/blob/6706f4b228f51cf810129f57ba90bbdb60b85fe7/tests/postgres/chinook_db_test.go#L187). 
+The whole test database is joined and query result(~10,000 rows) is stored in a structured variable in less than 0.5s. 
 
 ##### How quickly bugs are found
 
-The most expensive bugs are the one on the production and the least expensive are those found during development.
+The most expensive bugs are the one discovered on the production, and the least expensive are those found during development.
 With automatically generated type safe SQL, not only queries are written faster but bugs are found sooner.  
-Lets return to quick start example, and take closer look at a line:
+Let's return to quick start example, and take closer look at a line:
  ```go
 AND(Film.Length.GT(Int(180))),
 ```
-Lets say someone changes column `length` to `duration` from `film` table. The next go build will fail at that line and 
+Let's say someone changes column `length` to `duration` from `film` table. The next go build will fail at that line, and 
 the bug will be caught at compile time.
 
-Lets say someone changes the type of `length` column to some non integer type. Build will also fail at the same line
-because integer columns and expressions can be only compered to other integer columns and expressions.
+Let's say someone changes the type of `length` column to some non integer type. Build will also fail at the same line
+because integer columns and expressions can be only compared to other integer columns and expressions.
 
-Build will also fail if someone removes `length` column from `film` table, because `Film` field will be omitted from SQL Builder and Model types, next time `jet` generator is run.
+Build will also fail if someone removes `length` column from `film` table. `Film` field will be omitted from SQL Builder and Model types, 
+next time `jet` generator is run.
 
 Without Jet these bugs will have to be either caught by some test or by manual testing. 
 
 ## Dependencies
 At the moment Jet dependence only of:
-- `github.com/lib/pq` _(Used by jet generator to read information about database schema from `PostgreSQL`)_
-- `github.com/go-sql-driver/mysql` _(Used by jet generator to read information about database from `MySQL` and `MariaDB`)_
+- `github.com/lib/pq` _(Used by jet generator to read `PostgreSQL` database information)_
+- `github.com/go-sql-driver/mysql` _(Used by jet generator to read `MySQL` and `MariaDB` database information)_
+- `github.com/mattn/go-sqlite3` _(Used by jet generator to read `SQLite` database information)_ 
 - `github.com/google/uuid` _(Used in data model files and for debug purposes)_
   
 To run the tests, additional dependencies are required:
@@ -571,6 +570,8 @@ To run the tests, additional dependencies are required:
 - `github.com/stretchr/testify`
 - `github.com/google/go-cmp`
 - `github.com/jackc/pgx/v4`
+- `github.com/shopspring/decimal`
+- `github.com/volatiletech/null/v8`
 
 ## Versioning
 
@@ -578,5 +579,5 @@ To run the tests, additional dependencies are required:
 
 ## License
 
-Copyright 2019-2021 Goran Bjelanovic  
+Copyright 2019-2023 Goran Bjelanovic  
 Licensed under the Apache License, Version 2.0.
